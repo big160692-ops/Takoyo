@@ -1,104 +1,159 @@
 # Takoyo AI Agent
 
-A local desktop AI assistant for **coding, image generation, and general conversation**.
-Built with Python + tkinter (runs on your computer). Features your Takoyo octopus mascot as the app icon.
+A local desktop AI assistant for **building, generating, coding, and chatting**.
+Built with Python + tkinter and drawn in a quiet white-and-ink style with the
+Takoyo octopus mascot.
 
 ## Features
 
-- **Its own AI** — built-in local model (Qwen2.5 via llama.cpp) that runs on your PC with no account, API key, or cloud service
-- **AI Chat** — conversation with the built-in model or OpenAI, Anthropic, Google Gemini, and Ollama
-- **Coding help** — write, debug, refactor, and explain code
-- **Code editor & runner** — edit Python files and run them safely with captured output
-- **Image generation** — DALL·E 3 via OpenAI (saved to a local gallery)
-- **File browser** — read/write/delete files and navigate folders
-- **Settings** — API keys, base URLs, default model, temperature, max tokens, theme, local model manager
-- **Conversation memory** — chat history is saved locally
-- **Local API** — token-free HTTP API for chat, images, files, and code execution (OpenAI-compatible)
-- **API tab** — start/stop the server, watch live request activity, review endpoint docs
+- **Its own AI** — bundled llama.cpp runtime + Qwen2.5 model that runs on your
+  PC. No account, no API key, no cloud, and no per-message limits.
+- **Unlimited chats** — the local model streams every reply; history is saved
+  locally and organised by project.
+- **Unlimited image generation** — "Takoyo Art" paints original images on this
+  computer with no key and no quota. DALL·E 3 is optional if you prefer it.
+- **Project editing** — open a real folder as a project and ask Takoyo to
+  scaffold, refactor, or fix it. Suggested files appear as inline cards with
+  **Apply**, or apply automatically if you enable it.
+- **Project file browser** — read, edit, create, and delete files inside the
+  project without leaving the app.
+- **Cloud models when you want them** — OpenAI, Anthropic, Google Gemini, and
+  Ollama, with a connection test.
+- **Local API** — token-free OpenAI-compatible HTTP API for chat, images, files,
+  and code execution.
+
+## The interface
+
+The app follows a three-screen layout:
+
+1. **Home** — the mascot, the tagline, and one outlined composer with a
+   paperclip and microphone.
+2. **Sidebar** — search, **PROJECTS**, and **RECENTS**. It slides away for a
+   full-width chat and returns with the panel icon.
+3. **Chat** — right-aligned outlined user bubbles, assistant replies with a mini
+   mascot, full-width code blocks, and a right-hand art panel for generated
+   images.
 
 ## Project structure
 
 ```
 Takoyo/
-├── main.py                  # Entry point
-├── requirements.txt         # Optional dependencies (Pillow for image preview)
+├── main.py                  # Entry point (GUI, API, setup)
+├── requirements.txt         # Pillow (required for the custom UI)
 ├── README.md
-├── logo.png                 # App icon (Takoyo mascot)
+├── logo.png                 # App icon
+├── assets/
+│   ├── mascot.png           # Octopus mascot
+│   ├── mascot_white.png
+│   └── fonts/               # Bundled Poppins faces
 └── takoyo_agent/
     ├── __init__.py
     ├── config.py            # Settings & persistent config
-    ├── model_catalog.py     # Local models Takoyo can run
+    ├── model_catalog.py     # Local + cloud model catalog
     ├── local_ai.py          # Downloads + runs the built-in llama.cpp engine
     ├── ai_providers.py      # Local, OpenAI, Anthropic, Google, Ollama providers
-    ├── image_gen.py         # DALL-E image generation
+    ├── prompting.py         # System prompt, project-edit & image tool tags
+    ├── image_gen.py         # Takoyo Art + optional DALL·E 3
     ├── code_tools.py        # Safe code execution & file ops
     ├── memory.py            # Conversation history
-    ├── api.py               # Built-in local HTTP API (no auth)
-    └── gui.py               # tkinter desktop UI
+    ├── projects.py          # Project folders, safe paths, file tree
+    ├── api.py               # Built-in local HTTP API
+    ├── theme.py             # Palette, fonts, DPI, measuring
+    ├── widgets.py           # Cards, buttons, composer, code blocks, fields
+    ├── visuals.py           # Antialiased mascot, wordmark, icons
+    ├── dialogs.py           # Settings, project files, new project
+    └── gui.py               # App shell, sidebar, home, chat, art panel
 ```
 
 ## Quick start
 
-### 1. Install Python (3.10+ recommended)
-If you don't have Python, download it from https://python.org
+### 1. Install Python
 
-### 2. (Optional) Install Pillow for image previews
+Python 3.10+ is recommended. On Windows, get it from https://python.org.
+
+### 2. Install dependencies
+
 ```bash
-python -m pip install Pillow
+python -m pip install -r requirements.txt
 ```
-The app works without it — you'll just see file paths instead of previews in the Image tab.
+
+Pillow draws the antialiased outlines, mascot, wordmark, and art, so the app
+needs it to start.
 
 ### 3. Run the app
+
 ```bash
-cd "C:\Users\Joshua Tallocoy\Downloads\Takoyo"
+cd path\to\Takoyo
 python main.py
 ```
 
 ### 4. Give Takoyo a brain
 
 **Option A — built-in local AI (recommended, no account):**
+
 ```bash
 python main.py --setup-local
 ```
-Downloads the llama.cpp engine (~24 MB) and Qwen2.5 1.5B (~1.1 GB) once,
-verifies it, and makes it the default. After that Takoyo works offline.
-You can also do this from **Settings → Built-in AI** (pick 0.5B / 1.5B / 3B).
 
-**Option B — use a cloud provider:** open **Settings** and enter an API key:
+This downloads the llama.cpp engine (~24 MB) and Qwen2.5 1.5B (~1.1 GB) once,
+verifies them, and makes the model the default. You can do the same from
+**Settings → Built-in AI** (pick 0.5B / 1.5B / 3B). After that, chats and
+Takoyo Art work offline.
+
+**Option B — use a cloud provider:** open **Settings → Chat** and enter a key.
 
 | Provider | API key source | Models |
 |----------|----------------|--------|
-| OpenAI | https://platform.openai.com/api-keys | gpt-4o, gpt-4o-mini, DALL-E 3 |
+| OpenAI | https://platform.openai.com/api-keys | gpt-4o, gpt-4o-mini, DALL·E 3 |
 | Anthropic | https://console.anthropic.com/ | Claude 3.5 Sonnet, Haiku |
 | Google | https://aistudio.google.com/ | Gemini 1.5 / 2.0 |
 | Ollama | Run locally: https://ollama.com | Any model you pull |
 
-Then click **Test Connection** to verify.
+Then click **Test connection** to verify.
 
 ## Usage
 
-- **Chat**: Pick a provider + model, type a message, press Enter (Shift+Enter for newline).
-- **Code**: Open the Code tab, write Python, click Run. Output appears below.
-- **Image**: Open the Image tab, enter a prompt, click Generate Image (requires OpenAI key).
-- **Files**: Browse, read, write, and delete files.
-- **API**: Open the API tab and click **Start API** (or run with `--api`).
+- **Chat** — type in the composer and press Enter (Shift+Enter for a newline).
+  The built-in model starts automatically the first time you send a message.
+- **Switch models** — the sun icon opens Settings; the image icon opens the art
+  panel when a chat has generated images.
+- **Projects** — use **+** beside PROJECTS to create a folder. Takoyo writes
+  only inside that folder.
+- **Edit files with AI** — ask for a change. Each proposed file appears as a
+  code block; click **Apply** to write it. **Settings → Permissions** can apply
+  edits automatically.
+- **Files** — the **Files** button in the chat header opens the project editor
+  (create, edit, save, delete).
+- **Images** — ask Takoyo to generate an image, or use the image button. Art is
+  saved in `~/.takoyo/images` and shown in the right-hand panel.
+
+## Build the Windows executable
+
+`Takoyo.spec` bundles the app into one windowed exe with the Takoyo icon,
+Poppins fonts, mascot and art engine inside.
+
+```bash
+python -m pip install pyinstaller
+python -m PyInstaller Takoyo.spec
+```
+
+The result is `dist/Takoyo.exe` (~32 MB). Builds must be made on Windows.
 
 ## Built-in local AI
 
-Takoyo can be its own AI: it downloads an open-weights model and runs it on
+Takoyo can be its own AI: it downloads open-weight model files and runs them on
 this computer through llama.cpp. Nothing is sent to OpenAI, Anthropic, Google,
 or any other AI service, and no API key or account is involved.
 
 - **Where it lives:** `~/.takoyo/llama/` (engine) and `~/.takoyo/models/` (GGUF weights).
-- **Platform:** Windows x64/arm64 (it downloads the official llama.cpp CPU build).
+- **Platform:** Windows x64/arm64 (official llama.cpp CPU build).
 - **Models:** Qwen2.5 0.5B, 1.5B (default), and 3B (all Apache-2.0), plus a
   135M model used for smoke tests. Pick one in **Settings → Built-in AI**.
-  Takoyo runs these open-weight models itself; it does not call another AI provider.
-- **When it starts:** automatically on the first local message; stop it with
-  the **Stop** button.
+- **When it starts:** automatically on the first local message; stop it from the
+  composer while it is thinking, or from **Settings → Built-in AI**.
 - **Offline:** after the one-time download, no internet is required.
-- **Limits:** local models are text-only and smaller than cloud models. Image
-  generation still requires an OpenAI key.
+- **Limits:** local models are text-only and smaller than cloud models. Images
+  use the separate offline Takoyo Art painter (or DALL·E 3 with an OpenAI key).
 
 Headless setup:
 
@@ -120,9 +175,9 @@ python main.py --api --port 9000     # custom port
 python main.py --api --host 0.0.0.0  # expose on the network (see warning)
 ```
 
-Defaults: `http://127.0.0.1:8765`. You can also start/stop it from the **API**
-tab and enable **Start with Takoyo**. The `api.host`, `api.port`, and
-`api.auto_start` values live in `~/.takoyo/config.json`.
+Defaults: `http://127.0.0.1:8765`. You can also start/stop it from
+**Settings → Local API**. The `api_host`, `api_port`, and `api_auto_start`
+values live in `~/.takoyo/config.json`.
 
 ### Endpoints
 
@@ -199,13 +254,18 @@ Code execution still requires it to be enabled in Settings.
 
 ## Safety
 
-Code execution is sandboxed to a local `takoyo_workspace` folder in your home directory and only whitelisted commands (`python`, `pip`) are allowed. Code execution can be disabled in Settings.
-
-The Local API intentionally has no authentication (see the warning above). Keep it on `127.0.0.1` unless you trust every device that can reach the port.
-
-The local AI setup downloads the llama.cpp engine from its official GitHub
-releases and model weights from Hugging Face. Downloads are verified for
-completeness; after that, local chat makes no network calls.
+- Project edits are resolved inside the project folder; path traversal is
+  rejected and obvious secret files (`.env`, keys, credentials) are hidden from
+  the file tree and AI context.
+- Deleting a project moves it to `~/.takoyo/trash` instead of erasing it.
+- Code execution is sandboxed to a local `takoyo_workspace` folder in your home
+  directory and only whitelisted commands (`python`, `pip`) are allowed. It can
+  be disabled in **Settings → Permissions**.
+- The Local API intentionally has no authentication (see the warning above).
+  Keep it on `127.0.0.1` unless you trust every device that can reach the port.
+- The local AI setup downloads the llama.cpp engine from its official GitHub
+  releases and model weights from Hugging Face. Downloads are verified for
+  completeness; after that, local chat makes no network calls.
 
 ## License
 

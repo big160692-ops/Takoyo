@@ -1,3 +1,2 @@
-# Optional - only needed for image preview in the Image tab.
-# The app runs without it using only the Python standard library.
+# Required: draws the antialiased outlines, mascot, wordmark and art.
 Pillow>=10.0.0
