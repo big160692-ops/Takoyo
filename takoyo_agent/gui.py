@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import re
@@ -15,6 +16,7 @@ from pathlib import Path
 from tkinter import filedialog
 
 from . import ai_providers, model_catalog, prompting, theme, visuals
+from .animation import Tween, ease_in_out_cubic, lerp_color
 from .config import Config
 from .image_gen import ImageGenerator
 from .local_ai import LocalAIError, LocalAINotReady, get_engine
@@ -254,7 +256,18 @@ class CircleButton(tk.Canvas):
 
     def _on_click(self, _event=None):
         if self._enabled and self._command:
+            try:
+                self.coords(self._icon_item, self._size // 2, self._size // 2 + 1)
+                self.after(90, self._restore_icon)
+            except Exception:
+                pass
             self._command()
+
+    def _restore_icon(self):
+        try:
+            self.coords(self._icon_item, self._size // 2, self._size // 2)
+        except Exception:
+            pass
 
     def set_icon(self, icon: str):
         self._icon = icon
@@ -273,13 +286,15 @@ class CircleButton(tk.Canvas):
 # Composer
 # --------------------------------------------------------------------------- #
 class Composer(tk.Frame):
-    def __init__(self, master, app, width: int | None = None):
+    def __init__(self, master, app):
         super().__init__(master, bg=theme.WHITE)
         self.app = app
         self.attachment: dict | None = None
         self._thinking = False
+        self._think_job = None
+        self._think_phase = 0
+        self._think_base = "Thinking"
 
-        kwargs = {"width": width} if width else {}
         self.surface = RoundedCanvas(
             self,
             radius=18,
@@ -288,12 +303,8 @@ class Composer(tk.Frame):
             thickness=1.5,
             bg=theme.WHITE,
             height=152,
-            **kwargs,
         )
-        if width:
-            self.surface.pack(anchor="center")
-        else:
-            self.surface.pack(fill="x")
+        self.surface.pack(fill="x")
         self.surface._size = (0, 0)
 
         body = self.surface.body
@@ -488,10 +499,13 @@ class Composer(tk.Frame):
     def set_thinking(self, thinking: bool, label: str = "Thinking…"):
         self._thinking = thinking
         if thinking:
+            self._think_base = (label or "Thinking").replace("…", "").rstrip(". ").strip() or "Thinking"
             self.text.configure(state="disabled")
-            self.placeholder.configure(text="  " + label, image=self._mascot_ph, compound="left", fg=theme.MUTED)
+            self.placeholder.configure(text="  " + self._think_base, image=self._mascot_ph, compound="left", fg=theme.MUTED)
             self.placeholder.place(x=1, y=0)
+            self._start_thinking_dots()
         else:
+            self._stop_thinking_dots()
             self.text.configure(state="normal")
             self.placeholder.configure(text=self._ph_text, image="", compound="none", fg=theme.MUTED)
             if self.get_text().strip():
@@ -501,6 +515,37 @@ class Composer(tk.Frame):
         self._stop_visible = False
         self.stop.pack_forget()
         self._refresh_buttons()
+
+    def _start_thinking_dots(self):
+        if self._think_job is not None:
+            return
+        self._think_phase = 0
+        self._tick_thinking()
+
+    def _tick_thinking(self):
+        if not self._thinking:
+            self._think_job = None
+            return
+        try:
+            dots = "." * (self._think_phase % 3 + 1)
+            self._think_phase += 1
+            self.placeholder.configure(
+                text="  " + self._think_base + dots,
+                image=self._mascot_ph,
+                compound="left",
+                fg=theme.MUTED,
+            )
+            self._think_job = self.after(360, self._tick_thinking)
+        except Exception:
+            self._think_job = None
+
+    def _stop_thinking_dots(self):
+        if self._think_job is not None:
+            try:
+                self.after_cancel(self._think_job)
+            except Exception:
+                pass
+            self._think_job = None
 
 
 # --------------------------------------------------------------------------- #
@@ -574,11 +619,18 @@ class Header(tk.Frame):
 # Home
 # --------------------------------------------------------------------------- #
 class HomeView(tk.Frame):
+    INNER_MAX = 760
+    INNER_MARGIN = 64
+    TAGLINE_WIDE = "Want to build, generate, or just want a\nchat. Let me Know"
+    TAGLINE_NARROW = "Want to build, generate, or just want a chat. Let me Know"
+
     def __init__(self, master, app):
         super().__init__(master, bg=theme.WHITE)
         self.app = app
+        self._inner_w = 0
         self.inner = tk.Frame(self, bg=theme.WHITE)
         self.inner.place(relx=0.5, rely=0.5, anchor="center")
+        self.bind("<Configure>", self._on_resize)
 
         self.scope = tk.Frame(self.inner, bg=theme.WHITE)
         self.scope_icon = tk.Label(self.scope, image=visuals.icon_photo("folder", 14, theme.MUTED), bg=theme.WHITE)
@@ -586,26 +638,47 @@ class HomeView(tk.Frame):
         self.scope_label = tk.Label(self.scope, text="", bg=theme.WHITE, fg=theme.MUTED, font=theme.font(11, "medium"))
         self.scope_label.pack(side="left", padx=(6, 0))
 
-        self.mascot = tk.Label(self.inner, image=visuals.mascot_photo(238), bg=theme.WHITE, bd=0)
-        self.mascot.pack(pady=(0, 18))
+        self._float_job = None
+        self._float_running = False
+        self._float_started = 0.0
+        self.mascot_holder = tk.Frame(self.inner, bg=theme.WHITE, width=260, height=256)
+        self.mascot_holder.pack(pady=(0, 18))
+        self.mascot_holder.pack_propagate(False)
+        self.mascot = tk.Label(self.mascot_holder, image=visuals.mascot_photo(238), bg=theme.WHITE, bd=0)
+        self.mascot.place(relx=0.5, rely=0.5, anchor="center")
+        self._narrow = False
         self.tagline = tk.Label(
             self.inner,
-            text="Want to build, generate, or just want a\nchat. Let me Know",
+            text=self.TAGLINE_WIDE,
             bg=theme.WHITE,
             fg=theme.INK,
             font=theme.font(26),
             justify="center",
+            wraplength=self.INNER_MAX - 8,
         )
         self.tagline.pack(pady=(0, 24))
-        self.composer = Composer(self.inner, app, width=760)
-        self.composer.pack()
+        self.composer = Composer(self.inner, app)
+        self.composer.pack(fill="x")
         self.set_project(None)
+
+    def _on_resize(self, event):
+        width = min(self.INNER_MAX, max(220, event.width - self.INNER_MARGIN))
+        width = min(width, max(1, event.width - 8))
+        if width == self._inner_w:
+            return
+        self._inner_w = width
+        self.inner.place_configure(width=width)
+        narrow = width < 660
+        if narrow != self._narrow:
+            self._narrow = narrow
+            self.tagline.configure(text=self.TAGLINE_NARROW if narrow else self.TAGLINE_WIDE)
+        self.tagline.configure(wraplength=max(200, width - 8))
 
     def set_project(self, meta: dict | None):
         if meta:
             self.scope_label.configure(text=f"Working in {_short(meta.get('name', 'project'), 30)}")
             if not self.scope.winfo_ismapped():
-                self.scope.pack(pady=(0, 14), before=self.mascot)
+                self.scope.pack(pady=(0, 14), before=self.mascot_holder)
             self.scope_label.configure(cursor="hand2")
             self.scope_label.bind("<Button-1>", lambda e: self.app.open_project_files())
             self.scope_icon.bind("<Button-1>", lambda e: self.app.open_project_files())
@@ -614,6 +687,39 @@ class HomeView(tk.Frame):
 
     def focus(self):
         self.composer.focus()
+
+    # ------------------------------------------------------------------ #
+    def start_float(self):
+        if self._float_running:
+            return
+        self._float_running = True
+        self._float_started = time.perf_counter()
+        self._tick_float()
+
+    def stop_float(self):
+        self._float_running = False
+        if self._float_job is not None:
+            try:
+                self.after_cancel(self._float_job)
+            except Exception:
+                pass
+            self._float_job = None
+        try:
+            self.mascot.place_configure(y=0)
+        except Exception:
+            pass
+
+    def _tick_float(self):
+        if not self._float_running:
+            self._float_job = None
+            return
+        try:
+            elapsed = time.perf_counter() - self._float_started
+            offset = round(math.sin(elapsed * math.tau / 4.6) * 5)
+            self.mascot.place_configure(y=offset)
+            self._float_job = self.after(30, self._tick_float)
+        except Exception:
+            self._float_job = None
 
 
 # --------------------------------------------------------------------------- #
@@ -669,6 +775,9 @@ class Sidebar(tk.Frame):
         self.dot = tk.Canvas(inner, width=9, height=9, bg=theme.WHITE, highlightthickness=0, bd=0)
         self.dot.pack(side="left", padx=(0, 8))
         self.dot_id = self.dot.create_oval(1, 1, 8, 8, fill=theme.FAINT, outline="")
+        self._dot_job = None
+        self._dot_phase = 0.0
+        self._dot_color = theme.FAINT
         self.status_label = tk.Label(inner, text="Built-in AI", bg=theme.WHITE, fg=theme.MUTED, font=theme.font(10, "medium"))
         self.status_label.pack(side="left")
         IconButton(
@@ -815,10 +924,48 @@ class Sidebar(tk.Frame):
     def refresh_status(self):
         text, color = self.app.provider_status()
         self.status_label.configure(text=text)
+        self._dot_color = color
         self.dot.itemconfigure(self.dot_id, fill=color)
+        if color == theme.SUCCESS:
+            self._start_dot_pulse()
+        else:
+            self._stop_dot_pulse()
         if self.app.api_server is not None:
             port = self.app.api_server.server_address[1]
             self.status_label.configure(text=f"{text} · API :{port}")
+
+    def _start_dot_pulse(self):
+        if self._dot_job is not None:
+            return
+        self._dot_phase = 0.0
+        self._tick_dot()
+
+    def _tick_dot(self):
+        try:
+            self._dot_phase += 0.09
+            wave = (math.sin(self._dot_phase) + 1.0) / 2.0
+            self.dot.itemconfigure(
+                self.dot_id,
+                fill=lerp_color(theme.SUCCESS, "#5AC98D", 0.15 + wave * 0.55),
+            )
+            self._dot_job = self.after(60, self._tick_dot)
+        except Exception:
+            self._dot_job = None
+
+    def _stop_dot_pulse(self):
+        if self._dot_job is not None:
+            try:
+                self.after_cancel(self._dot_job)
+            except Exception:
+                pass
+            self._dot_job = None
+        try:
+            self.dot.itemconfigure(self.dot_id, fill=self._dot_color)
+        except Exception:
+            pass
+
+    def stop_animations(self):
+        self._stop_dot_pulse()
 
 
 # --------------------------------------------------------------------------- #
@@ -830,16 +977,21 @@ class ChatView(tk.Frame):
         self.app = app
         self._live_text = None
         self._live_label = None
+        self._live_job = None
+        self._live_phase = 0
         self._current = None
 
+        self._composer_pad = 16
         self.composer_host = tk.Frame(self, bg=theme.WHITE)
         self.composer_host.pack(side="bottom", fill="x", padx=16, pady=(4, 14))
         self.composer = Composer(self.composer_host, app)
         self.composer.pack(fill="x")
+        self.bind("<Configure>", self._on_resize)
 
         self.projectbar = tk.Frame(self, bg=theme.WHITE)
         self.holder = tk.Frame(self, bg=theme.WHITE)
         self.holder.pack(fill="both", expand=True, pady=(4, 0))
+        self._scroll_job = None
         self.scroll = ScrollArea(self.holder, bg=theme.WHITE)
         self.scroll.pack(fill="both", expand=True, padx=(0, 2))
         self.scroll_btn = IconButton(
@@ -858,6 +1010,12 @@ class ChatView(tk.Frame):
         self._scroll_visible = False
         self._tick_scroll()
         self.set_project(None)
+
+    def _on_resize(self, event):
+        pad = max(16, (event.width - 760) // 2)
+        if pad != self._composer_pad:
+            self._composer_pad = pad
+            self.composer_host.pack_configure(padx=pad)
 
     # ------------------------------------------------------------------ #
     def set_project(self, meta: dict | None):
@@ -884,6 +1042,7 @@ class ChatView(tk.Frame):
     # ------------------------------------------------------------------ #
     def refresh(self, conv: dict | None):
         self._current = conv
+        self._stop_live_dots()
         self._live_text = None
         self._live_label = None
         for child in self.scroll.inner.winfo_children():
@@ -900,6 +1059,7 @@ class ChatView(tk.Frame):
 
     def clear(self):
         self._current = None
+        self._stop_live_dots()
         self._live_text = None
         self._live_label = None
         for child in self.scroll.inner.winfo_children():
@@ -1095,7 +1255,7 @@ class ChatView(tk.Frame):
         column.pack(side="left", fill="both", expand=True)
         self._live_label = tk.Label(
             column,
-            text="  Takoyo is thinking…",
+            text="  Takoyo is thinking",
             image=visuals.mascot_photo(17),
             compound="left",
             bg=theme.WHITE,
@@ -1103,9 +1263,38 @@ class ChatView(tk.Frame):
             font=theme.font(12),
         )
         self._live_label.pack(anchor="w", pady=(2, 0))
+        self._start_live_dots()
         self._live_text = RichText(column, text="", size=15, bg=theme.WHITE)
         self._scroll_if_bottom()
         self.app.root.after(50, self.scroll_to_bottom)
+
+    def _start_live_dots(self):
+        self._stop_live_dots()
+        self._live_phase = 0
+        self._tick_live_dots()
+
+    def _tick_live_dots(self):
+        label = self._live_label
+        if label is None:
+            self._live_job = None
+            return
+        try:
+            if not label.winfo_exists():
+                self._live_job = None
+                return
+            label.configure(text="  Takoyo is thinking" + "." * (self._live_phase % 3 + 1))
+            self._live_phase += 1
+            self._live_job = self.after(380, self._tick_live_dots)
+        except Exception:
+            self._live_job = None
+
+    def _stop_live_dots(self):
+        if self._live_job is not None:
+            try:
+                self.after_cancel(self._live_job)
+            except Exception:
+                pass
+            self._live_job = None
 
     def append_stream(self, text: str):
         if not self._live_text:
@@ -1115,6 +1304,7 @@ class ChatView(tk.Frame):
                 return
         except Exception:
             return
+        self._stop_live_dots()
         if self._live_label is not None:
             try:
                 self._live_label.destroy()
@@ -1155,7 +1345,7 @@ class ChatView(tk.Frame):
         except Exception:
             pass
         try:
-            self.after(320, self._tick_scroll)
+            self._scroll_job = self.after(320, self._tick_scroll)
         except Exception:
             pass
 
@@ -1368,6 +1558,9 @@ class ArtPanel(tk.Frame):
 # The app
 # --------------------------------------------------------------------------- #
 class TakoyoApp:
+    SIDEBAR_WIDTH = 396
+    ART_WIDTH = 360
+
     def __init__(self, root: tk.Tk, config: Config | None = None, start_api: bool = False, api_host=None, api_port=None):
         self.root = root
         self.config = config or Config()
@@ -1389,6 +1582,9 @@ class TakoyoApp:
         self._stream_index = -1
         self._image_jobs = 0
         self._art_visible = False
+        self._sidebar_tween = None
+        self._art_tween = None
+        self._drain_job = None
         self._closed = False
         self._install_state: dict | None = None
         self._test_serial = 0
@@ -1405,29 +1601,42 @@ class TakoyoApp:
         if not re.match(r"^\d+x\d+([+-]\d+[+-]\d+)?$", geometry):
             geometry = "1280x800"
         self.root.geometry(geometry)
-        self.root.grid_rowconfigure(0, weight=1)
-        self.root.grid_columnconfigure(1, weight=1)
 
-        self.sidebar = Sidebar(self.root, self)
+        self.sidebar_host = tk.Canvas(
+            self.root, bg=theme.WHITE, width=0, height=1, highlightthickness=0, bd=0
+        )
+        self.sidebar = Sidebar(self.sidebar_host, self)
+        self._sidebar_item = self.sidebar_host.create_window(
+            0, 0, anchor="nw", window=self.sidebar, width=self.SIDEBAR_WIDTH
+        )
+        self.sidebar_host.bind("<Configure>", self._size_sidebar)
 
         self.main = tk.Frame(self.root, bg=theme.WHITE)
-        self.main.grid(row=0, column=1, sticky="nsew")
+        self.main.pack(side="left", fill="both", expand=True)
         self.header = Header(self.main, self)
         self.header.pack(fill="x")
         self.body = tk.Frame(self.main, bg=theme.WHITE)
         self.body.pack(fill="both", expand=True)
-        self.body.grid_rowconfigure(0, weight=1)
-        self.body.grid_columnconfigure(0, weight=1)
 
-        self.home = HomeView(self.body, self)
-        self.chat = ChatView(self.body, self)
-        self.art = ArtPanel(self.body, self)
+        self.content = tk.Frame(self.body, bg=theme.WHITE)
+        self.content.pack(side="left", fill="both", expand=True)
+        self.content.grid_rowconfigure(0, weight=1)
+        self.content.grid_columnconfigure(0, weight=1)
+
+        self.home = HomeView(self.content, self)
+        self.chat = ChatView(self.content, self)
+        self.art_host = tk.Canvas(self.body, bg=theme.WHITE, width=0, height=1, highlightthickness=0, bd=0)
+        self.art = ArtPanel(self.art_host, self)
+        self._art_item = self.art_host.create_window(
+            0, 0, anchor="nw", window=self.art, width=self.ART_WIDTH
+        )
+        self.art_host.bind("<Configure>", self._size_art)
         self.composers = [self.home.composer, self.chat.composer]
 
         self.home.grid(row=0, column=0, sticky="nsew")
         self.chat.grid(row=0, column=0, sticky="nsew")
         self.home.lift()
-        self.art.grid_forget()
+        self.art_host.pack(side="right", fill="y", before=self.content)
 
         pid = str(self.config.get("last_project", "") or "")
         if pid:
@@ -1436,12 +1645,18 @@ class TakoyoApp:
                 self.current_project = meta
         self.home.set_project(self.current_project)
         self.app_visible_sidebar = bool(self.config.get("sidebar_open", False))
-        if self.app_visible_sidebar:
-            self.sidebar.grid_forget()
-            self.sidebar.grid(row=0, column=0, sticky="ns")
-            self.header.set_sidebar(True)
+        self.sidebar_host.pack(side="left", fill="y", before=self.main)
+        self.sidebar_host.configure(width=self.SIDEBAR_WIDTH if self.app_visible_sidebar else 0)
+        self.header.set_sidebar(self.app_visible_sidebar)
+
+        # Lay the art panel out once off-screen so its first slide has no render hitch.
+        self.art_host.configure(width=self.ART_WIDTH)
+        self.root.update_idletasks()
+        self.art_host.configure(width=0)
+
         self.refresh_sidebar()
         self.home.focus()
+        self.home.start_float()
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.bind("<Control-n>", lambda e: self.new_chat())
@@ -1499,9 +1714,11 @@ class TakoyoApp:
         self.home.grid(row=0, column=0, sticky="nsew")
         self.home.lift()
         self.home.set_project(self.current_project)
+        self.home.start_float()
         self.home.focus()
 
     def show_chat(self):
+        self.home.stop_float()
         self.chat.grid(row=0, column=0, sticky="nsew")
         self.chat.lift()
         if self.current_conversation:
@@ -1510,14 +1727,56 @@ class TakoyoApp:
         self.chat.composer.focus()
 
     def toggle_sidebar(self):
-        self.app_visible_sidebar = not self.app_visible_sidebar
-        if self.app_visible_sidebar:
-            self.sidebar.grid_forget()
-            self.sidebar.grid(row=0, column=0, sticky="ns")
-        else:
-            self.sidebar.grid_forget()
-        self.header.set_sidebar(self.app_visible_sidebar)
-        self.config.set("sidebar_open", self.app_visible_sidebar)
+        opening = not self.app_visible_sidebar
+        self.app_visible_sidebar = opening
+        self.header.set_sidebar(opening)
+        self.config.set("sidebar_open", opening)
+        self._slide_sidebar(opening)
+
+    def _size_sidebar(self, event):
+        try:
+            self.sidebar_host.itemconfigure(
+                self._sidebar_item, width=self.SIDEBAR_WIDTH, height=max(1, event.height)
+            )
+            # Right-anchor the panel so its right edge rides the moving boundary;
+            # a left-anchored embed would be wiped instead of sliding.
+            self.sidebar_host.coords(
+                self._sidebar_item, int(event.width) - self.SIDEBAR_WIDTH, 0
+            )
+        except Exception:
+            pass
+
+    def _size_art(self, event):
+        try:
+            self.art_host.itemconfigure(
+                self._art_item, width=self.ART_WIDTH, height=max(1, event.height)
+            )
+        except Exception:
+            pass
+
+    def _slide_sidebar(self, opening: bool):
+        if self._sidebar_tween is not None:
+            self._sidebar_tween.cancel()
+            self._sidebar_tween = None
+        full = self.SIDEBAR_WIDTH
+        width = self.sidebar_host.winfo_reqwidth()
+        start = width if width > 1 else 0
+        end = full if opening else 0
+
+        def update(t):
+            width = max(0, int(round(start + (end - start) * t)))
+            self.sidebar_host.configure(width=width)
+            self.sidebar_host.coords(self._sidebar_item, width - full, 0)
+
+        def done():
+            self._sidebar_tween = None
+            width = full if opening else 0
+            self.sidebar_host.configure(width=width)
+            self.sidebar_host.coords(self._sidebar_item, width - full, 0)
+
+        self._sidebar_tween = Tween(
+            self.sidebar_host, 240, update, done, interval=12, ease=ease_in_out_cubic
+        )
 
     def show_art(self, visible: bool, silent: bool = False):
         if visible == self._art_visible:
@@ -1526,18 +1785,33 @@ class TakoyoApp:
             if self.root.winfo_width() < 1120 and not silent:
                 self.toast("Widen the window to keep the art panel open", "image")
                 return
-            self.body.grid_columnconfigure(0, weight=3, minsize=380)
-            self.body.grid_columnconfigure(1, weight=2, minsize=360)
-            self.art.grid_forget()
-            self.art.grid(row=0, column=1, sticky="nsew")
-            self.art.lift()
             self._art_visible = True
+            width = self.art_host.winfo_reqwidth()
+            self._slide_art(width if width > 1 else 0, self.ART_WIDTH)
         else:
-            self.art.grid_forget()
-            self.body.grid_columnconfigure(0, weight=1, minsize=0)
-            self.body.grid_columnconfigure(1, weight=0, minsize=0)
             self._art_visible = False
+            self._slide_art(None, 0)
         self.header.set_art(self._art_visible)
+
+    def _slide_art(self, start, end: int):
+        if self._art_tween is not None:
+            self._art_tween.cancel()
+            self._art_tween = None
+        if start is None:
+            width = self.art_host.winfo_reqwidth()
+            start = width if width > 1 else self.ART_WIDTH
+        width = max(0, int(start))
+
+        def update(t):
+            self.art_host.configure(width=max(0, int(round(width + (end - width) * t))))
+
+        def done():
+            self._art_tween = None
+            self.art_host.configure(width=end)
+
+        self._art_tween = Tween(
+            self.art_host, 260, update, done, interval=12, ease=ease_in_out_cubic
+        )
 
     def toggle_art(self):
         if not self._art_visible:
@@ -1861,7 +2135,7 @@ class TakoyoApp:
         finally:
             if not self._closed:
                 try:
-                    self.root.after(25, self._drain_queue)
+                    self._drain_job = self.root.after(25, self._drain_queue)
                 except Exception:
                     pass
 
@@ -2252,6 +2526,20 @@ class TakoyoApp:
             pass
         try:
             self.engine.shutdown()
+        except Exception:
+            pass
+        try:
+            self.home.stop_float()
+            self.sidebar.stop_animations()
+            self.chat._stop_live_dots()
+            for job in (self._drain_job, self.chat._scroll_job):
+                if job is not None:
+                    self.root.after_cancel(job)
+            for composer in self.composers:
+                composer._stop_thinking_dots()
+            for tween in (self._sidebar_tween, self._art_tween):
+                if tween is not None:
+                    tween.cancel()
         except Exception:
             pass
         try:

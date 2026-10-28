@@ -8,6 +8,7 @@ import webbrowser
 from typing import Callable
 
 from . import theme, visuals
+from .animation import Tween
 
 
 def _font(size: int, weight: str = "regular") -> tuple:
@@ -18,7 +19,13 @@ def _font(size: int, weight: str = "regular") -> tuple:
 # Surfaces
 # --------------------------------------------------------------------------- #
 class RoundedCanvas(tk.Canvas):
-    """A canvas with a crisp rounded surface and an embedded body frame."""
+    """A canvas with a crisp rounded surface and an embedded body frame.
+
+    The rounded corners are cached tiles, so resizing only repositions canvas
+    items instead of re-rendering a full raster surface.
+    """
+
+    _corner_cache: dict = {}
 
     def __init__(
         self,
@@ -38,9 +45,7 @@ class RoundedCanvas(tk.Canvas):
         self.thickness = thickness
         self.padding = padding
         self.body = tk.Frame(self, bg=fill)
-        self._bg_item = None
         self._win = None
-        self._img = None
         self._size = (0, 0)
         self.bind("<Configure>", self._on_configure)
 
@@ -51,13 +56,45 @@ class RoundedCanvas(tk.Canvas):
         self._size = size
         self._render(*size)
 
+    def _corners(self):
+        key = (self.radius, round(float(self.thickness), 2), self.fill, self.outline or "")
+        entry = RoundedCanvas._corner_cache.get(key)
+        if entry is not None:
+            return entry
+        half = self.radius + 2
+        size = half * 2
+        image = visuals.rounded_image(
+            size, size, self.radius, self.fill, self.outline, self.thickness, bg=None
+        )
+        boxes = ((0, 0, half, half), (half, 0, size, half), (0, half, half, size), (half, half, size, size))
+        photos = [visuals._photo(image.crop(box)) for box in boxes]
+        RoundedCanvas._corner_cache[key] = (photos, half)
+        return photos, half
+
     def _render(self, w, h):
-        self._img = visuals.rounded_photo(w, h, self.radius, self.fill, self.outline, self.thickness, bg=None)
-        if self._bg_item is None:
-            self._bg_item = self.create_image(0, 0, anchor="nw", image=self._img)
-            self.tag_lower(self._bg_item)
-        else:
-            self.itemconfigure(self._bg_item, image=self._img)
+        radius = max(0, min(self.radius, w // 2, h // 2))
+        self.delete("surface")
+        self.create_rectangle(radius, 0, w - radius, h, fill=self.fill, outline="", tags="surface")
+        self.create_rectangle(0, radius, w, h - radius, fill=self.fill, outline="", tags="surface")
+        if self.outline and self.thickness > 0:
+            width = max(1, int(round(self.thickness)))
+            offset = width / 2.0
+            x0, y0, x1, y1 = offset, offset, w - offset, h - offset
+            for x_start, y_start, x_end, y_end in (
+                (x0 + radius, y0, x1 - radius, y0),
+                (x0, y0 + radius, x0, y1 - radius),
+                (x1, y0 + radius, x1, y1 - radius),
+                (x0 + radius, y1, x1 - radius, y1),
+            ):
+                self.create_line(
+                    x_start, y_start, x_end, y_end,
+                    fill=self.outline, width=width, tags="surface",
+                )
+        photos, half = self._corners()
+        for photo, (cx, cy) in zip(
+            photos, ((0, 0), (w - half, 0), (0, h - half), (w - half, h - half))
+        ):
+            self.create_image(cx, cy, anchor="nw", image=photo, tags="surface")
         pad = self.padding
         if self._win is None:
             self._win = self.create_window(pad, pad, anchor="nw", window=self.body)
@@ -994,6 +1031,8 @@ class Toast(tk.Toplevel):
         super().__init__(master)
         self.wm_overrideredirect(True)
         self.wm_attributes("-topmost", True)
+        self._closing = False
+        self._tween = None
         try:
             self.wm_attributes("-alpha", 0.0)
         except Exception:
@@ -1006,21 +1045,44 @@ class Toast(tk.Toplevel):
         tk.Label(row, text=text, bg=theme.INK, fg=theme.WHITE, font=_font(11, "medium")).pack(side="left")
         self.update_idletasks()
         width, height = self.winfo_reqwidth(), self.winfo_reqheight()
+        x = y = None
         try:
             x = master.winfo_rootx() + (master.winfo_width() - width) // 2
             y = master.winfo_rooty() + master.winfo_height() - height - 52
-            self.geometry(f"+{x}+{y}")
+            self.geometry(f"+{x}+{y + 14}")
             self.lift()
-        except Exception:
-            pass
-        try:
-            self.wm_attributes("-alpha", 0.98)
+            self._tween = Tween(self, 200, lambda t: self._fade(t, x, y))
         except Exception:
             pass
         self.after(duration, self._close)
 
-    def _close(self):
+    def _fade(self, t: float, x: int, y: int):
         try:
-            self.destroy()
+            self.wm_attributes("-alpha", max(0.0, 0.98 * t))
+        except Exception:
+            pass
+        try:
+            self.geometry(f"+{x}+{int(round(y + 14 * (1 - t)))}")
+        except Exception:
+            pass
+
+    def _close(self):
+        if self._closing:
+            return
+        self._closing = True
+        if self._tween is not None:
+            self._tween.cancel()
+            self._tween = None
+        try:
+            self._tween = Tween(self, 150, self._fade_out, self.destroy)
+        except Exception:
+            try:
+                self.destroy()
+            except Exception:
+                pass
+
+    def _fade_out(self, t: float):
+        try:
+            self.wm_attributes("-alpha", max(0.0, 0.98 * (1 - t)))
         except Exception:
             pass

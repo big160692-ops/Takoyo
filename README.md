@@ -4,6 +4,10 @@ A local desktop AI assistant for **building, generating, coding, and chatting**.
 Built with Python + tkinter and drawn in a quiet white-and-ink style with the
 Takoyo octopus mascot.
 
+**Release 2.00** — the sidebar and art panel now slide in and out cleanly instead
+of clipping mid-motion, alongside the floating mascot, animated thinking dots,
+and other motion feedback.
+
 ## Features
 
 - **Its own AI** — bundled llama.cpp runtime + Qwen2.5 model that runs on your
@@ -21,6 +25,8 @@ Takoyo octopus mascot.
   Ollama, with a connection test.
 - **Local API** — token-free OpenAI-compatible HTTP API for chat, images, files,
   and code execution.
+- **Subtle motion** — the mascot floats, the sidebar and art panel glide, and
+  thinking, status, and toast feedback animate.
 
 ## The interface
 
@@ -48,6 +54,7 @@ Takoyo/
 │   └── fonts/               # Bundled Poppins faces
 └── takoyo_agent/
     ├── __init__.py
+    ├── animation.py         # Easing, color blending, and cancellable tweens
     ├── config.py            # Settings & persistent config
     ├── model_catalog.py     # Local + cloud model catalog
     ├── local_ai.py          # Downloads + runs the built-in llama.cpp engine
@@ -137,7 +144,8 @@ python -m pip install pyinstaller
 python -m PyInstaller Takoyo.spec
 ```
 
-The result is `dist/Takoyo.exe` (~32 MB). Builds must be made on Windows.
+The result is `dist/Takoyo.exe` (~20 MB). Builds must be made on Windows.
+A prebuilt copy is included at the project root as `Takoyo.exe`.
 
 ## Built-in local AI
 
@@ -229,7 +237,7 @@ curl -X POST http://127.0.0.1:8765/v1/images/generations \
 curl -X POST http://127.0.0.1:8765/run \
   -H "Content-Type: application/json" -d '{"code": "print(2 + 2)"}'
 curl -X POST http://127.0.0.1:8765/files/write \
-  -H "Content-Type: application/json" -d '{"path": "notes.txt", "content": "hello"}'
+  -H "Content-Type: application/json" -d '{"path": "workspace/notes.txt", "content": "hello"}'
 
 # Built-in local AI (no key). Initial setup downloads the model first.
 curl -X POST http://127.0.0.1:8765/local/setup \
@@ -244,13 +252,18 @@ overrides; `message` (single string) or `messages` (OpenAI-style list).
 Conversation history is only saved when you pass `conversation_id`, and only
 after a successful reply.
 
+File paths are relative to `~/.takoyo`. Reads can open anything under that
+folder; **writes and deletes are limited to `workspace/` and `projects/`**,
+and deleted paths are moved to `~/.takoyo/trash`.
+
 ### ⚠ Security warning
 
 As requested, this API has **no authentication, no rate limits, and no quota**.
-Anyone who can reach the port can chat, run code, and read, write, or delete
-files with your user permissions. It binds to `127.0.0.1` by default for that
-reason — only use `--host 0.0.0.0` (or another interface) on a trusted network.
-Code execution still requires it to be enabled in Settings.
+Anyone who can reach the port can chat, run code, read files under `~/.takoyo`,
+and write or delete files inside `workspace/` and `projects/`. It binds to
+`127.0.0.1` by default for that reason — only use `--host 0.0.0.0` (or another
+interface) on a trusted network. Code execution still requires it to be
+enabled in Settings.
 
 ## Safety
 
@@ -261,6 +274,8 @@ Code execution still requires it to be enabled in Settings.
 - Code execution is sandboxed to a local `takoyo_workspace` folder in your home
   directory and only whitelisted commands (`python`, `pip`) are allowed. It can
   be disabled in **Settings → Permissions**.
+- The Local API's write and delete endpoints only accept paths inside
+  `workspace/` and `projects/`.
 - The Local API intentionally has no authentication (see the warning above).
   Keep it on `127.0.0.1` unless you trust every device that can reach the port.
 - The local AI setup downloads the llama.cpp engine from its official GitHub
