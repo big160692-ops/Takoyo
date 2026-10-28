@@ -1570,6 +1570,7 @@ class TakoyoApp:
         self.engine = get_engine(self.config)
         self.queue: queue.Queue = queue.Queue()
         self.sidebar_query = ""
+        self._search_job = None
         self.current_project: dict | None = None
         self.current_conversation: dict | None = None
         self.settings = None
@@ -2009,6 +2010,17 @@ class TakoyoApp:
 
     def on_sidebar_search(self, query: str):
         self.sidebar_query = (query or "").strip()
+        # Rebuilding the list reads every stored chat, so wait for a pause in
+        # typing instead of stalling the UI thread once per keystroke.
+        if self._search_job is not None:
+            try:
+                self.root.after_cancel(self._search_job)
+            except Exception:
+                pass
+        self._search_job = self.root.after(120, self._run_sidebar_search)
+
+    def _run_sidebar_search(self):
+        self._search_job = None
         self.refresh_sidebar()
 
     # ------------------------------------------------------------------ #
@@ -2508,13 +2520,23 @@ class TakoyoApp:
             return
         self._closed = True
         try:
-            if self.cancel_token is not None:
-                self.cancel_token.cancel()
+            self.config.set("window_geometry", self.root.geometry())
+            self.config.set("sidebar_open", self.app_visible_sidebar)
+        except Exception:
+            pass
+        # Hide first: stopping llama-server can block for seconds, and Windows
+        # paints an unresponsive or half-torn-down window as a white sheet.
+        try:
+            for child in self.root.winfo_children():
+                if isinstance(child, tk.Toplevel):
+                    child.withdraw()
+            self.root.withdraw()
+            self.root.update_idletasks()
         except Exception:
             pass
         try:
-            self.config.set("window_geometry", self.root.geometry())
-            self.config.set("sidebar_open", self.app_visible_sidebar)
+            if self.cancel_token is not None:
+                self.cancel_token.cancel()
         except Exception:
             pass
         try:
@@ -2532,20 +2554,44 @@ class TakoyoApp:
             self.home.stop_float()
             self.sidebar.stop_animations()
             self.chat._stop_live_dots()
-            for job in (self._drain_job, self.chat._scroll_job):
-                if job is not None:
-                    self.root.after_cancel(job)
+            # Cancel each job through the widget that scheduled it. Cancelling
+            # ChatView's scroll job via root deletes the Tcl command but leaves
+            # it in ChatView's destroy list, which aborts root.destroy() and
+            # strands a blank window with a live event loop.
+            if self._drain_job is not None:
+                self.root.after_cancel(self._drain_job)
+                self._drain_job = None
+            if self.chat._scroll_job is not None:
+                self.chat.after_cancel(self.chat._scroll_job)
+                self.chat._scroll_job = None
+            if self._search_job is not None:
+                self.root.after_cancel(self._search_job)
+                self._search_job = None
             for composer in self.composers:
                 composer._stop_thinking_dots()
-            for tween in (self._sidebar_tween, self._art_tween):
-                if tween is not None:
-                    tween.cancel()
+            if self._sidebar_tween is not None:
+                self._sidebar_tween.cancel()
+                self._sidebar_tween = None
+            if self._art_tween is not None:
+                self._art_tween.cancel()
+                self._art_tween = None
         except Exception:
             pass
         try:
             self.root.destroy()
         except Exception:
             pass
+        try:
+            still_open = bool(self.root.winfo_exists())
+        except Exception:
+            still_open = False
+        if still_open:
+            # Never leave a half-destroyed white window (and its process) behind.
+            try:
+                self.root.quit()
+            except Exception:
+                pass
+            os._exit(0)
 
 
 # --------------------------------------------------------------------------- #

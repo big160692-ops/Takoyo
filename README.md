@@ -4,9 +4,9 @@ A local desktop AI assistant for **building, generating, coding, and chatting**.
 Built with Python + tkinter and drawn in a quiet white-and-ink style with the
 Takoyo octopus mascot.
 
-**Release 2.00** — the sidebar and art panel now slide in and out cleanly instead
-of clipping mid-motion, alongside the floating mascot, animated thinking dots,
-and other motion feedback.
+**Release 2.01** — closing the window now shuts down cleanly instead of leaving
+a blank white window behind, and typing in sidebar search no longer stalls the
+interface. Includes the 2.00 slide-in sidebar and art panel.
 
 ## Features
 
