@@ -1,6 +1,11 @@
 __pycache__/
 *.py[cod]
+*.exe
 build/
 dist/
+native/dist/
+native/engine-build/
+native/engine-dist/
+native/single/
 .venv/
 venv/

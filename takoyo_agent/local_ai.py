@@ -7,6 +7,7 @@ import os
 import platform
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -68,12 +69,15 @@ class LocalEngine:
         self._external = False
         self._ready = False
         self._starting = False
+        self._port = 0
         self._engine_cache = _read_json(ENGINE_DIR / "engine.json")
 
     # ------------------------------------------------------------------ #
     # Status
     # ------------------------------------------------------------------ #
     def port(self) -> int:
+        if self._port:
+            return self._port
         try:
             return int(self.config.get("local_port", 8766))
         except Exception:
@@ -118,6 +122,9 @@ class LocalEngine:
         with self._lock:
             if self._proc is not None and self._proc.poll() is not None:
                 self._proc = None
+                self._ready = False
+            if self._ready and self._external and not self._healthy():
+                self._external = False
                 self._ready = False
             return self._ready or self._proc is not None
 
@@ -326,6 +333,46 @@ class LocalEngine:
         except Exception:
             return False
 
+    def _served_model(self, port: int) -> str:
+        try:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/v1/models", headers={"User-Agent": USER_AGENT}
+            )
+            with urllib.request.urlopen(request, timeout=2) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except Exception:
+            return ""
+        entries = data.get("data") if isinstance(data, dict) else None
+        for entry in entries if isinstance(entries, list) else []:
+            if isinstance(entry, dict) and entry.get("id"):
+                return str(entry["id"])
+        return ""
+
+    @staticmethod
+    def _same_model(served: str, path: Path) -> bool:
+        if not served:
+            return False
+        try:
+            a = os.path.normcase(os.path.abspath(served))
+            b = os.path.normcase(os.path.abspath(str(path)))
+        except Exception:
+            return False
+        return a == b or os.path.basename(a) == os.path.basename(b)
+
+    @staticmethod
+    def _port_open(port: int) -> bool:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return True
+        except OSError:
+            return False
+
+    def _free_port(self, preferred: int) -> int:
+        for port in range(preferred, preferred + 24):
+            if not self._port_open(port):
+                return port
+        raise LocalAIError("No free local port was available to start the built-in model.")
+
     def _tail_log(self, lines: int = 18) -> str:
         path = LOGS_DIR / "llama-server.log"
         try:
@@ -348,7 +395,10 @@ class LocalEngine:
             )
         with self._lock:
             if self._ready and self.running() and self._model_key == key:
-                return
+                # The server can die while the app is idle; wake it back up
+                # instead of answering this request with a connection error.
+                if self._external or self._healthy():
+                    return
         self.start(key, progress=progress)
 
     def start(self, key: str | None = None, progress=None) -> None:
@@ -373,7 +423,18 @@ class LocalEngine:
                 )
             self.stop()
             model_path = self.model_path(key)
-            port = self.port()
+            preferred = self.port()
+            if self._port_open(preferred):
+                if self._same_model(self._served_model(preferred), model_path):
+                    self._model_key = key
+                    self._external = True
+                    self._port = preferred
+                    self._ready = True
+                    if progress:
+                        progress(1.0, f"{local_model(key).name} is awake.")
+                    return
+            port = self._free_port(preferred)
+            self._port = port
             threads = int(self.config.get("local_threads", 0) or 0) or max(2, min(8, (os.cpu_count() or 4) - 1))
             context = int(self.config.get("local_context", 8192) or 8192)
             log_path = LOGS_DIR / "llama-server.log"
@@ -418,6 +479,11 @@ class LocalEngine:
                         "The built-in model stopped while loading. " + (f"\n{tail}" if tail else "")
                     )
                 if self._healthy():
+                    served = self._served_model(port)
+                    if served and not self._same_model(served, model_path):
+                        # Another server answered on this port before ours bound.
+                        time.sleep(0.4)
+                        continue
                     self._ready = True
                     if progress:
                         progress(1.0, f"{local_model(key).name} is awake.")
@@ -437,6 +503,8 @@ class LocalEngine:
             self._proc = None
             self._ready = False
             self._model_key = ""
+            self._external = False
+            self._port = 0
             if proc is not None:
                 try:
                     if proc.poll() is None:

@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import os
+import subprocess
+import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Iterator
 
 from . import model_catalog
@@ -141,6 +147,210 @@ def _model(config: Config, provider: str, model: str | None) -> str:
     return chosen
 
 
+def _plain_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "\n\n".join(
+        part.get("text", "") for part in content
+        if isinstance(part, dict) and part.get("type") == "text" and part.get("text")
+    )
+
+
+def _data_url(value) -> tuple[str, str] | None:
+    url = value.get("url") if isinstance(value, dict) else value
+    if not isinstance(url, str) or not url.startswith("data:"):
+        return None
+    header, _, data = url.partition(",")
+    if ";base64" not in header or not data:
+        return None
+    mime = header[5:].split(";")[0] or "image/png"
+    return mime, data
+
+
+_OCR_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
+    $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+})[0]
+function Await($WinRtTask, $ResultType) {
+    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+    $netTask = $asTask.Invoke($null, @($WinRtTask))
+    $netTask.Wait(-1) | Out-Null
+    $netTask.Result
+}
+[Windows.Storage.StorageFile,Windows.Storage,ContentType=WindowsRuntime] | Out-Null
+[Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics.Imaging,ContentType=WindowsRuntime] | Out-Null
+[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime] | Out-Null
+
+$path = $args[0]
+$file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($path)) ([Windows.Storage.StorageFile])
+$stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+$bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+if ($null -eq $engine) { exit 3 }
+$result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+foreach ($line in $result.Lines) { $line.Text }
+"""
+
+_OCR_EXTENSIONS = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/bmp": ".bmp",
+    "image/tiff": ".tiff",
+}
+
+_ocr_script_path: str | None = None
+
+
+def _ocr_script() -> str:
+    global _ocr_script_path
+    if _ocr_script_path and os.path.exists(_ocr_script_path):
+        return _ocr_script_path
+    fd, path = tempfile.mkstemp(prefix="takoyo-ocr-", suffix=".ps1")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(_OCR_SCRIPT)
+    _ocr_script_path = path
+    return path
+
+
+def _ocr_image(data: str, mime: str) -> str:
+    """Read text from an image with the OCR engine built into Windows."""
+    if sys.platform != "win32":
+        return ""
+    suffix = _OCR_EXTENSIONS.get(mime.lower())
+    if not suffix:
+        return ""
+    try:
+        raw = base64.b64decode(data, validate=False)
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    fd, image_path = tempfile.mkstemp(prefix="takoyo-ocr-", suffix=suffix)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(raw)
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+             "-File", _ocr_script(), os.path.abspath(image_path)],
+            capture_output=True, timeout=30, creationflags=flags,
+        )
+        text = result.stdout.decode("utf-8", "replace") if result.stdout else ""
+    except Exception:
+        return ""
+    finally:
+        try:
+            os.unlink(image_path)
+        except OSError:
+            pass
+    lines = [line.strip() for line in text.replace("\r\n", "\n").split("\n")]
+    return "\n".join(line for line in lines if line)[:12000]
+
+
+def _anthropic_blocks(content) -> list[dict]:
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content.strip() else []
+    blocks = []
+    for part in content if isinstance(content, list) else []:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text" and part.get("text"):
+            blocks.append({"type": "text", "text": part["text"]})
+        elif part.get("type") == "image_url":
+            parsed = _data_url(part.get("image_url"))
+            if parsed:
+                blocks.append({"type": "image", "source": {
+                    "type": "base64", "media_type": parsed[0], "data": parsed[1]}})
+            else:
+                blocks.append({"type": "text", "text": "[An attached image could not be read.]"})
+    return blocks
+
+
+def _google_parts(content) -> list[dict]:
+    if isinstance(content, str):
+        return [{"text": content}] if content.strip() else []
+    parts = []
+    for part in content if isinstance(content, list) else []:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text" and part.get("text"):
+            parts.append({"text": part["text"]})
+        elif part.get("type") == "image_url":
+            parsed = _data_url(part.get("image_url"))
+            if parsed:
+                parts.append({"inlineData": {"mimeType": parsed[0], "data": parsed[1]}})
+            else:
+                parts.append({"text": "[An attached image could not be read.]"})
+    return parts
+
+
+_OLLAMA_VISION = ("llava", "vision", "bakllava", "moondream", "minicpm-v", "qwen2-vl", "qwen2.5-vl",
+                  "llama3.2-vision", "gemma3", "granite3.2-vision")
+
+
+def _ollama_messages(messages: list[dict], model: str = "") -> list[dict]:
+    vision = any(tag in (model or "").lower() for tag in _OLLAMA_VISION)
+    if not vision:
+        return _strip_images_for_text(messages)
+    prepared = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, str):
+            prepared.append({"role": message.get("role"), "content": content})
+            continue
+        texts, images = [], []
+        for part in content if isinstance(content, list) else []:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text" and part.get("text"):
+                texts.append(part["text"])
+            elif part.get("type") == "image_url":
+                parsed = _data_url(part.get("image_url"))
+                if parsed:
+                    images.append(parsed[1])
+        entry = {"role": message.get("role"), "content": "\n\n".join(texts)}
+        if images:
+            entry["images"] = images
+        prepared.append(entry)
+    return prepared
+
+
+def _strip_images_for_text(messages: list[dict]) -> list[dict]:
+    stripped = []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            stripped.append(message)
+            continue
+        texts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
+        read = []
+        for part in content:
+            if not isinstance(part, dict) or part.get("type") != "image_url":
+                continue
+            parsed = _data_url(part.get("image_url"))
+            text = _ocr_image(parsed[1], parsed[0]) if parsed else ""
+            read.append(text)
+        text = "\n\n".join(t for t in texts if t)
+        if read:
+            seen = [t for t in read if t]
+            if seen:
+                text += ("\n\n[On-device OCR read this text from the attached image. "
+                         "Use it to answer; do not claim you cannot access files:]\n" + "\n\n".join(seen))
+            else:
+                text += ("\n\n[An image is attached but the on-device OCR found no readable text. "
+                         "If the user asks about its contents, ask them to describe what matters.]")
+        stripped.append({"role": message.get("role"), "content": text})
+    return stripped
+
+
 # --------------------------------------------------------------------------- #
 # Providers
 # --------------------------------------------------------------------------- #
@@ -180,19 +390,19 @@ def _openai_stream(config: Config, messages: list[dict], model: str, temperature
 
 def _anthropic_stream(config: Config, messages: list[dict], model: str, temperature: float, max_tokens: int, cancel) -> Iterator[str]:
     key = _require_key(config, "anthropic")
-    system = "\n\n".join(m["content"] for m in messages if m.get("role") == "system")
+    system = "\n\n".join(_plain_text(m["content"]) for m in messages if m.get("role") == "system")
     convo: list[dict] = []
     for message in messages:
         if message.get("role") not in ("user", "assistant"):
             continue
-        content = message.get("content", "")
-        if not content.strip():
+        blocks = _anthropic_blocks(message.get("content", ""))
+        if not blocks:
             continue
         role = message["role"]
         if convo and convo[-1]["role"] == role:
-            convo[-1]["content"] += "\n\n" + content
+            convo[-1]["content"].extend(blocks)
         else:
-            convo.append({"role": role, "content": content})
+            convo.append({"role": role, "content": blocks})
     if convo and convo[0]["role"] == "assistant":
         convo.insert(0, {"role": "user", "content": "Continue."})
     payload = {
@@ -235,19 +445,19 @@ def _anthropic_stream(config: Config, messages: list[dict], model: str, temperat
 
 def _google_stream(config: Config, messages: list[dict], model: str, temperature: float, max_tokens: int, cancel) -> Iterator[str]:
     key = _require_key(config, "google")
-    system = "\n\n".join(m["content"] for m in messages if m.get("role") == "system")
+    system = "\n\n".join(_plain_text(m["content"]) for m in messages if m.get("role") == "system")
     contents: list[dict] = []
     for message in messages:
         if message.get("role") not in ("user", "assistant"):
             continue
-        text = message.get("content", "")
-        if not text.strip():
+        parts = _google_parts(message.get("content", ""))
+        if not parts:
             continue
         role = "model" if message["role"] == "assistant" else "user"
         if contents and contents[-1]["role"] == role:
-            contents[-1]["parts"].append({"text": text})
+            contents[-1]["parts"].extend(parts)
         else:
-            contents.append({"role": role, "parts": [{"text": text}]})
+            contents.append({"role": role, "parts": parts})
     if contents and contents[0]["role"] == "model":
         contents.insert(0, {"role": "user", "parts": [{"text": "Continue."}]})
     payload = {
@@ -290,7 +500,7 @@ def _google_stream(config: Config, messages: list[dict], model: str, temperature
 def _ollama_stream(config: Config, messages: list[dict], model: str, temperature: float, max_tokens: int, cancel) -> Iterator[str]:
     payload = {
         "model": model,
-        "messages": messages,
+        "messages": _ollama_messages(messages, model),
         "stream": True,
         "options": {"temperature": float(temperature), "num_predict": int(max_tokens)},
     }
@@ -327,7 +537,7 @@ def stream_chat(
     tokens = int(config.get("max_tokens", 2048) if max_tokens is None else max_tokens)
     if provider == "local":
         engine = get_engine(config)
-        yield from engine.stream_chat(messages, temperature=temp, max_tokens=tokens, cancel=cancel, key=chosen_model)
+        yield from engine.stream_chat(_strip_images_for_text(messages), temperature=temp, max_tokens=tokens, cancel=cancel, key=chosen_model)
     elif provider == "openai":
         yield from _openai_stream(config, messages, chosen_model, temp, tokens, cancel)
     elif provider == "anthropic":

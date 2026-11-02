@@ -1,12 +1,39 @@
 # Takoyo AI Agent
 
 A local desktop AI assistant for **building, generating, coding, and chatting**.
-Built with Python + tkinter and drawn in a quiet white-and-ink style with the
-Takoyo octopus mascot.
+The window is a native **C++/Qt 6** app; the AI engine, projects, image painter,
+and local API stay in Python. Everything ships as one `Takoyo.exe` and is drawn
+in a quiet white-and-ink style with the Takoyo octopus mascot.
 
-**Release 2.01** — closing the window now shuts down cleanly instead of leaving
-a blank white window behind, and typing in sidebar search no longer stalls the
-interface. Includes the 2.00 slide-in sidebar and art panel.
+**Release 2.1.0** — the interface is now native C++/Qt with smoother animation,
+lower CPU use, and a bundled Qwen2.5 3B model for the built-in AI. `Takoyo.exe`
+is a single file that unpacks its runtime to
+`%LOCALAPPDATA%\Takoyo\app-<build>` and starts the Python engine beside it. If
+the engine stops while the app is open, the window restarts it and resends the
+message instead of failing.
+
+## Launch
+
+1. Double-click `Takoyo.exe` (or run `.\Takoyo.exe` from a terminal). No
+   installation or admin rights are needed; the Python engine travels inside
+   the exe.
+2. The first launch unpacks the Qt window and engine to
+   `%LOCALAPPDATA%\Takoyo\app-<build>` and takes a moment; later launches reuse that
+   copy and open immediately.
+3. The window opens and the local engine starts automatically on a free
+   loopback port. If Takoyo's API is already running on the configured port,
+   the window reuses it instead of starting another engine.
+4. Open **Settings** (the sun icon, or `Ctrl+,`) to choose a provider and paste
+   a cloud API key. To set up the built-in local model, run
+   `python main.py --setup-local` once from a source checkout.
+
+Your chats, projects, art, and settings live in `%USERPROFILE%\.takoyo`; the
+unpacked runtime cache lives in `%LOCALAPPDATA%\Takoyo`. The exe is portable —
+copy it anywhere, including a USB drive. If Windows shows a SmartScreen warning
+because the exe is unsigned, choose **More info → Run anyway**.
+
+To uninstall, delete `Takoyo.exe` and the two folders above. Deleting
+`%USERPROFILE%\.takoyo` also removes your history, projects, and generated art.
 
 ## Features
 
@@ -15,7 +42,15 @@ interface. Includes the 2.00 slide-in sidebar and art panel.
 - **Unlimited chats** — the local model streams every reply; history is saved
   locally and organised by project.
 - **Unlimited image generation** — "Takoyo Art" paints original images on this
-  computer with no key and no quota. DALL·E 3 is optional if you prefer it.
+  computer with no key and no quota, and draws the subject you ask for (a car,
+  a robot, a cat, a rocket, flowers, …). DALL·E 3 is optional if you prefer it.
+- **Reads your screenshots online or off** — attach an image and the built-in
+  model reads its text with Windows OCR, while cloud vision models can see the
+  picture itself.
+- **Reads the files you name** — drop a path into a message (`C:/notes/todo.md`,
+  `src/main.py`, or a path with spaces) and Takoyo opens it before answering,
+  inside or outside the project. The model can also request more files by path
+  while it works.
 - **Project editing** — open a real folder as a project and ask Takoyo to
   scaffold, refactor, or fix it. Suggested files appear as inline cards with
   **Apply**, or apply automatically if you enable it.
@@ -44,7 +79,8 @@ The app follows a three-screen layout:
 
 ```
 Takoyo/
-├── main.py                  # Entry point (GUI, API, setup)
+├── Takoyo.exe               # Single-file native build
+├── main.py                  # Python entry point (GUI, API, setup)
 ├── requirements.txt         # Pillow (required for the custom UI)
 ├── README.md
 ├── logo.png                 # App icon
@@ -52,6 +88,13 @@ Takoyo/
 │   ├── mascot.png           # Octopus mascot
 │   ├── mascot_white.png
 │   └── fonts/               # Bundled Poppins faces
+├── native/
+│   ├── CMakeLists.txt
+│   ├── engine_entry.py      # API-only entry frozen into TakoyoEngine.exe
+│   ├── TakoyoEngine.spec
+│   ├── pack_single.py       # Builds the one-file Takoyo.exe
+│   ├── launcher/            # Self-extracting Win32 launcher
+│   └── src/                 # Qt 6 window, views, dialogs, backend client
 └── takoyo_agent/
     ├── __init__.py
     ├── animation.py         # Easing, color blending, and cancellable tweens
@@ -69,10 +112,12 @@ Takoyo/
     ├── widgets.py           # Cards, buttons, composer, code blocks, fields
     ├── visuals.py           # Antialiased mascot, wordmark, icons
     ├── dialogs.py           # Settings, project files, new project
-    └── gui.py               # App shell, sidebar, home, chat, art panel
+    └── gui.py               # Python app shell (legacy front end)
 ```
 
-## Quick start
+## Run from source
+
+Use this for development; everyday use is just `Takoyo.exe` above.
 
 ### 1. Install Python
 
@@ -87,7 +132,7 @@ python -m pip install -r requirements.txt
 Pillow draws the antialiased outlines, mascot, wordmark, and art, so the app
 needs it to start.
 
-### 3. Run the app
+### 3. Run the Python front end
 
 ```bash
 cd path\to\Takoyo
@@ -132,20 +177,56 @@ Then click **Test connection** to verify.
 - **Files** — the **Files** button in the chat header opens the project editor
   (create, edit, save, delete).
 - **Images** — ask Takoyo to generate an image, or use the image button. Art is
-  saved in `~/.takoyo/images` and shown in the right-hand panel.
+  saved in `~/.takoyo/images` and shown in the right-hand panel. Takoyo Art
+  paints the subject you name (car, cat, robot, rocket, flowers, cake, …) in a
+  flat-illustration style instead of always drawing a landscape.
+- **Screenshots and photos** — the paperclip attaches text files or images
+  (PNG, JPEG, GIF, WebP, BMP). With the built-in model or Ollama, Takoyo reads
+  text out of the image on this PC using the OCR engine built into Windows, so
+  no key is needed. With OpenAI, Anthropic or Google selected, the image itself
+  is sent to that model.
+- **Read any file** — mention its path in the message ("summarise
+  `C:/Users/me/notes.txt`") or attach it, and Takoyo reads it before replying.
+  If the model needs another file, it asks for it by path and Takoyo sends the
+  contents back. Large files are trimmed to fit the model's context.
 
-## Build the Windows executable
+## Build Takoyo.exe
 
-`Takoyo.spec` bundles the app into one windowed exe with the Takoyo icon,
-Poppins fonts, mascot and art engine inside.
+The shipped `Takoyo.exe` is the native C++/Qt window with the Python engine
+frozen inside. Builds must be made on Windows.
+
+Requirements: Qt 6 (Widgets + Network), CMake, Ninja, MinGW-w64, zlib, and
+PyInstaller. The commands below use this machine's Qt 6.8.3 paths.
 
 ```bash
-python -m pip install pyinstaller
-python -m PyInstaller Takoyo.spec
+cd native
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/mingw_64
+cmake --build build
+
+mkdir -p dist
+cp build/bin/TakoyoNative.exe dist/
+windeployqt --release --no-translations dist/TakoyoNative.exe
+
+cd ..
+python -m PyInstaller --noconfirm \
+    --distpath native/engine-dist --workpath native/engine-build \
+    native/TakoyoEngine.spec
+python native/pack_single.py
+cp native/single/Takoyo.exe Takoyo.exe
 ```
 
-The result is `dist/Takoyo.exe` (~20 MB). Builds must be made on Windows.
-A prebuilt copy is included at the project root as `Takoyo.exe`.
+`native/pack_single.py` embeds the Qt runtime, `assets/`, and the frozen
+`TakoyoEngine.exe` into one launcher exe. On first run it unpacks to
+`%LOCALAPPDATA%\Takoyo\app-<build>` and starts the window; later launches reuse that
+copy. Copy `Takoyo.exe` anywhere — it needs no other files.
+
+Run `native/build/bin/TakoyoNative.exe` directly during development: it finds
+`main.py` in the repository and starts `python main.py --api-only` itself, or
+reuses a running API on the configured port. Settings changes apply to the next
+message; a new local API port takes effect the next time Takoyo starts.
+
+`python main.py` still opens the original Python/tkinter window for development.
 
 ## Built-in local AI
 

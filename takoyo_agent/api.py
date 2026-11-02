@@ -20,10 +20,33 @@ from .local_ai import LocalAIError, LocalAINotReady, get_engine
 from .memory import ConversationStore
 from .projects import ProjectStore
 
-MAX_BODY = 8 * 1024 * 1024
+MAX_BODY = 24 * 1024 * 1024
 _STARTED_AT = time.time()
 _LOCAL_JOBS: dict = {}
 _JOBS_LOCK = threading.Lock()
+
+
+def _normalize_content(content):
+    """Keep OpenAI-style text + image parts instead of flattening images away."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return None
+    parts = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        kind = part.get("type")
+        if kind == "text":
+            text = part.get("text")
+            if isinstance(text, str) and text:
+                parts.append({"type": "text", "text": text})
+        elif kind in ("image_url", "input_image"):
+            value = part.get("image_url") or part.get("image")
+            url = value.get("url") if isinstance(value, dict) else value
+            if isinstance(url, str) and url:
+                parts.append({"type": "image_url", "image_url": {"url": url}})
+    return parts or None
 
 
 class ApiError(Exception):
@@ -174,6 +197,7 @@ class TakoyoAPIHandler(BaseHTTPRequestHandler):
                             "GET /files?path=.", "GET /files/read?path=...",
                             "POST /files/write", "POST /files/delete",
                             "POST /run", "GET /local", "POST /local/setup", "POST /local/stop",
+                            "POST /config/reload",
                         ],
                     }
                 )
@@ -231,6 +255,12 @@ class TakoyoAPIHandler(BaseHTTPRequestHandler):
             if path == "/local/stop":
                 get_engine(self.config).stop()
                 return self._send_json({"ok": True, "running": False})
+            if path == "/config/reload":
+                fresh = Config()
+                type(self).config = fresh
+                self.config = fresh
+                self.images.config = fresh
+                return self._send_json({"ok": True, "provider": fresh.get("provider")})
             return self._error("Not found", 404)
         except ApiError as exc:
             return self._error(str(exc), exc.status)
@@ -375,13 +405,18 @@ class TakoyoAPIHandler(BaseHTTPRequestHandler):
             if not isinstance(item, dict):
                 continue
             role = item.get("role")
-            content = item.get("content")
-            if isinstance(content, list):
-                content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
-            if role not in ("system", "user", "assistant") or not isinstance(content, str):
+            if role not in ("system", "user", "assistant"):
+                continue
+            normalized = _normalize_content(item.get("content"))
+            if normalized is None:
+                continue
+            if isinstance(normalized, str):
+                if not normalized.strip():
+                    continue
+            elif not normalized:
                 continue
             has_system = has_system or role == "system"
-            messages.append({"role": role, "content": content})
+            messages.append({"role": role, "content": normalized})
         if not messages:
             raise ApiError("No valid messages")
         if not has_system:

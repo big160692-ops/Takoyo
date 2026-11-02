@@ -13,6 +13,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter
 
 from .config import IMAGES_DIR, Config, ensure_dirs
+from . import art_subjects
 
 USER_AGENT = "Takoyo/1.0"
 
@@ -409,15 +410,8 @@ def _vignette(im: Image.Image) -> Image.Image:
     return Image.composite(im.convert("RGB"), dark, mask)
 
 
-def render_art(prompt: str, size: tuple[int, int] = (1024, 1280), seed: int | None = None) -> tuple[Image.Image, int, str]:
-    w, h = max(512, int(size[0])), max(512, int(size[1]))
-    seed = int(seed if seed is not None else int(hashlib.sha256((prompt or "takoyo").lower().encode()).hexdigest()[:8], 16))
-    rng = random.Random(seed)
-    palette, palette_key, features = _choose_palette(prompt)
-
-    # supersample for smooth silhouettes
-    scale = 2
-    W, H = w * scale, h * scale
+def _paint_landscape(prompt: str, W: int, H: int, palette: dict, palette_key: str,
+                     features: set[str], rng: random.Random) -> Image.Image:
     im = _gradient(W, H, palette["sky"]).convert("RGBA")
 
     night = palette_key in ("night", "space")
@@ -511,6 +505,34 @@ def render_art(prompt: str, size: tuple[int, int] = (1024, 1280), seed: int | No
         except Exception:
             pass
 
+    return im
+
+
+def render_art(prompt: str, size: tuple[int, int] = (1024, 1280), seed: int | None = None) -> tuple[Image.Image, int, str]:
+    w, h = max(512, int(size[0])), max(512, int(size[1]))
+    seed = int(seed if seed is not None else int(hashlib.sha256((prompt or "takoyo").lower().encode()).hexdigest()[:8], 16))
+    rng = random.Random(seed)
+
+    # supersample for smooth silhouettes
+    scale = 2
+    W, H = w * scale, h * scale
+
+    analysis = art_subjects.analyze(prompt)
+    text = analysis["text"] or prompt
+    palette, palette_key, features = _choose_palette(text)
+    subject = analysis["subject"]
+    base_color = analysis["color"] or art_subjects.default_color(subject)
+
+    if subject and not analysis["scene"]:
+        im = art_subjects.studio(W, H, rng, subject, base_color, palette, palette_key)
+    elif subject:
+        im = _paint_landscape(text, W, H, palette, palette_key, features, rng)
+        art_subjects.overlay(im, subject, base_color, rng)
+    elif analysis["scene"]:
+        im = _paint_landscape(text, W, H, palette, palette_key, features, rng)
+    else:
+        im = art_subjects.abstract(W, H, rng, base_color, palette)
+
     im = im.convert("RGB").resize((w, h), Image.LANCZOS)
     im = _grain(im)
     im = _vignette(im)
@@ -564,6 +586,7 @@ class ImageGenerator:
             "height": image.height,
             "seed": used_seed,
             "style": style,
+            "subject": art_subjects.analyze(prompt)["subject"],
             "created": time.time(),
             "seconds": round(time.time() - started, 2),
         }
