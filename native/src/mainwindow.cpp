@@ -110,7 +110,11 @@ const QString kBasePrompt = QStringLiteral(
     "You are Takoyo, a warm, clever octopus AI who lives inside the Takoyo desktop app.\n"
     "You help people build software, make images, explore ideas and simply chat.\n"
     "Be concise, direct and human. Use Markdown when it helps (short paragraphs, bullets, fenced code).\n"
-    "Never claim to have run something you did not run. If you are unsure, say so and suggest a check.\n\n"
+    "Never claim to have run something you did not run. If you are unsure, say so and suggest a check.\n"
+    "Answer the user's question in this reply. If you already know the answer, give it now instead of "
+    "describing what you would do. Never end with a promise to fetch, look up or do something "
+    "\"in the next step\" or \"in the next turn\": either use one of the tools below in this reply, "
+    "or answer directly with what you know.\n\n"
     "You can create images. To do that, emit exactly:\n"
     "<takoyo-image>a detailed image prompt</takoyo-image>\n"
     "Takoyo renders it in the art panel on the right.");
@@ -124,7 +128,7 @@ const QString kProjectTools = QStringLiteral(
     "<takoyo-tool>\n"
     "{\"tool\": \"read_file\", \"path\": \"relative/path.ext\"}\n"
     "</takoyo-tool>\n"
-    "Takoyo sends you the contents in its next turn. Use {\"tool\": \"list_dir\", \"path\": \"folder\"} "
+    "Takoyo fetches the file and sends it to you right away. Use {\"tool\": \"list_dir\", \"path\": \"folder\"} "
     "to list a folder. Paths may be absolute (for example C:/Users/you/notes.txt) or relative to "
     "the project root.\n"
     "When you need to replace or create a file, emit exactly this block (valid JSON, full file content):\n"
@@ -145,17 +149,35 @@ const QString kProjectTools = QStringLiteral(
 const QString kNoProjectPrompt = QStringLiteral(
     "No project is open. If the user wants to build or edit a project, suggest starting one "
     "from the sidebar so you can touch the files directly.\n"
-    "You can still read files from this computer. If a file's contents are missing from your "
-    "context, do not apologize and never say you cannot read files. Reply with exactly this block "
-    "and nothing else:\n"
+    "You can still read files from this computer, but only when the user asks about a specific "
+    "file or folder. If its contents are missing from your context, do not apologize and never "
+    "say you cannot read files. Reply with exactly this block and nothing else:\n"
     "<takoyo-tool>\n"
     "{\"tool\": \"read_file\", \"path\": \"C:/Users/you/file.txt\"}\n"
     "</takoyo-tool>\n"
-    "Takoyo replies with the file contents in the next turn. Use {\"tool\": \"list_dir\", \"path\": "
-    "\"folder\"} to list a folder.");
+    "Takoyo fetches the file and sends it to you right away. Use {\"tool\": \"list_dir\", \"path\": "
+    "\"folder\"} to list a folder. For general questions about facts, words, definitions, history, "
+    "science or code, answer from what you know and do not fetch or search for anything.");
 
 const QString kImageTools = QStringLiteral(
     "If the user asks you to visualise something, prefer the <takoyo-image> tool above over describing it.");
+
+// Small local models sometimes answer a direct question with a plan ("I'll fetch
+// a corpus… in the next step") instead of the answer. Such replies are detected
+// here so they can be retried once with an explicit instruction to answer now.
+bool isDeferredPromise(const QString &text)
+{
+    if (text.size() > 700)
+        return false;
+    static const QRegularExpression re(
+        QStringLiteral("\\b(?:in the next (?:step|turn)|next (?:step|turn) I will|"
+                       "I(?:'ll| will| am going to) (?:fetch|look|search|check|list|"
+                       "gather|retrieve|download|pull|read)|"
+                       "let me (?:fetch|look|search|check|find|retrieve|download)|"
+                       "let(?:'s| us) (?:fetch|look up|look for|search|check|review|read|use))\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    return re.match(text).hasMatch();
+}
 
 QString attachmentNote(const QString &name, const QString &content)
 {
@@ -181,6 +203,8 @@ QString systemPrompt(const ProjectStore &projects, bool hasProject, const Projec
         parts << kNoProjectPrompt;
     }
     parts << kImageTools;
+    parts << QStringLiteral("Answer now: if you know the answer, say it in this reply and do not "
+                            "promise to look it up later.");
     return parts.join(QStringLiteral("\n\n"));
 }
 
@@ -911,6 +935,7 @@ void MainWindow::sendFromComposer(Composer *composer)
     conversation_ = assistant;
 
     readRounds_ = 0;
+    promiseRetries_ = 0;
     beginReply(conversationId(), index, messages);
 }
 
@@ -1236,6 +1261,51 @@ void MainWindow::finishReply(const QString &cid, int index, const QString &full,
         chat_->refresh(conversation_);
         syncChatProject();
         chat_->scrollToBottom();
+    }
+
+    if (!cancelled && !cleaned.trimmed().isEmpty() && parsed.fileRequests.isEmpty()
+        && parsed.edits.isEmpty() && parsed.imagePrompts.isEmpty() && promiseRetries_ < 2
+        && isDeferredPromise(cleaned)) {
+        QJsonObject retryConv = conversations_.get(cid);
+        QJsonArray history = retryConv.value(QStringLiteral("messages")).toArray();
+        if (index >= 0 && index < history.size())
+            history.removeAt(index);
+        const QString correction = QStringLiteral(
+            "\n\nAnswer directly now. Do not fetch, read or search for anything, and do not say "
+            "you will do something later. Give the best answer you know; if it is uncertain, say "
+            "so in one sentence.");
+        bool appended = false;
+        for (int i = history.size() - 1; i >= 0; --i) {
+            QJsonObject message = history.at(i).toObject();
+            if (message.value(QStringLiteral("role")).toString() != QLatin1String("user"))
+                continue;
+            message.insert(QStringLiteral("content"),
+                           message.value(QStringLiteral("content")).toString() + correction);
+            history.replace(i, message);
+            appended = true;
+            break;
+        }
+        if (!appended) {
+            QJsonObject message;
+            message.insert(QStringLiteral("role"), QStringLiteral("user"));
+            message.insert(QStringLiteral("content"), correction.trimmed());
+            history.append(message);
+        }
+        retryConv.insert(QStringLiteral("messages"), history);
+        const QJsonArray retryMessages = chatRequest(lastUserText(cid), retryConv);
+        QJsonObject blank;
+        blank.insert(QStringLiteral("content"), QString());
+        const QJsonObject cleared = conversations_.updateMessage(cid, index, blank);
+        if (!cleared.isEmpty()) {
+            ++promiseRetries_;
+            conversation_ = cleared;
+            if (hasConversation_ && conversationId() == cid) {
+                chat_->refresh(conversation_);
+                chat_->scrollToBottom();
+            }
+            beginReply(cid, index, retryMessages);
+            return;
+        }
     }
 
     if (!cancelled && !parsed.fileRequests.isEmpty() && readRounds_ < 3) {

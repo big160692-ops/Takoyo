@@ -125,6 +125,7 @@ private:
     QString streamCid_;
     int streamIndex_ = -1;
     int readRounds_ = 0;
+    int promiseRetries_ = 0;
     int imageJobs_ = 0;
     bool closing_ = false;
 };

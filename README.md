@@ -5,12 +5,14 @@ The window is a native **C++/Qt 6** app; the AI engine, projects, image painter,
 and local API stay in Python. Everything ships as one `Takoyo.exe` and is drawn
 in a quiet white-and-ink style with the Takoyo octopus mascot.
 
-**Release 2.1.0** — the interface is now native C++/Qt with smoother animation,
+**Release 2.1.1** — the interface is native C++/Qt with smoother animation,
 lower CPU use, and a bundled Qwen2.5 3B model for the built-in AI. `Takoyo.exe`
 is a single file that unpacks its runtime to
 `%LOCALAPPDATA%\Takoyo\app-<build>` and starts the Python engine beside it. If
 the engine stops while the app is open, the window restarts it and resends the
-message instead of failing.
+message instead of failing. If the built-in model starts promising a "next
+step" instead of answering, Takoyo asks again and replaces the promise with the
+real answer.
 
 ## Launch
 

@@ -21,7 +21,7 @@ WORK = SINGLE / 'work'
 OUTPUT = SINGLE / 'Takoyo.exe'
 LAUNCHER = NATIVE / 'launcher' / 'launcher.cpp'
 ICON = ROOT / 'assets' / 'takoyo.ico'
-VERSION = '2.1.0'
+VERSION = '2.1.1'
 MINGW = Path(os.environ.get('MINGW_BIN', r'C:\Qt\Tools\mingw1310_64\bin'))
 
 MAGIC = b'TKYOPK02'

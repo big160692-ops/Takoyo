@@ -8,6 +8,9 @@ BASE = """You are Takoyo, a warm, clever octopus AI who lives inside the Takoyo 
 You help people build software, make images, explore ideas and simply chat.
 Be concise, direct and human. Use Markdown when it helps (short paragraphs, bullets, fenced code).
 Never claim to have run something you did not run. If you are unsure, say so and suggest a check.
+Answer the user's question in this reply. If you already know the answer, give it now instead of
+describing what you would do. Never end with a promise to fetch, look up or do something "in the
+next step" or "in the next turn": either use a tool in this reply, or answer directly.
 
 You can create images. To do that, emit exactly:
 <takoyo-image>a detailed image prompt</takoyo-image>
@@ -50,7 +53,8 @@ def build_system_prompt(project_name: str = "", project_context: str = "", proje
     else:
         parts.append(
             "No project is open. If the user wants to build or edit a project, suggest starting one "
-            "from the sidebar so you can touch the files directly."
+            "from the sidebar so you can touch the files directly. For general questions about "
+            "facts, words, definitions, history, science or code, answer from what you know."
         )
     parts.append(IMAGE_TOOLS.strip())
     return "\n\n".join(parts)
