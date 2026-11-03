@@ -574,6 +574,7 @@ class ImageGenerator:
         height = max(512, min(2048, height))
         started = time.time()
         image, used_seed, style = render_art(prompt, (width, height), seed)
+        analysis = art_subjects.analyze(prompt)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         path = IMAGES_DIR / f"takoyo-{stamp}-{used_seed & 0xFFFF:04x}.png"
         image.save(path, "PNG", optimize=True)
@@ -586,7 +587,8 @@ class ImageGenerator:
             "height": image.height,
             "seed": used_seed,
             "style": style,
-            "subject": art_subjects.analyze(prompt)["subject"],
+            "label": analysis["text"] or prompt,
+            "subject": analysis["subject"],
             "created": time.time(),
             "seconds": round(time.time() - started, 2),
         }

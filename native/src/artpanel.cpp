@@ -115,7 +115,9 @@ void ArtPanel::setGenerating(const QString &prompt)
 void ArtPanel::setArtifact(const QJsonObject &meta)
 {
     meta_ = meta;
-    prompt_ = meta.value(QStringLiteral("prompt")).toString();
+    prompt_ = meta.value(QStringLiteral("label")).toString();
+    if (prompt_.isEmpty())
+        prompt_ = meta.value(QStringLiteral("prompt")).toString();
     generating_ = false;
     stopPulse();
     const QString path = meta.value(QStringLiteral("path")).toString();

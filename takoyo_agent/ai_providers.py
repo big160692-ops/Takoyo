@@ -342,11 +342,14 @@ def _strip_images_for_text(messages: list[dict]) -> list[dict]:
         if read:
             seen = [t for t in read if t]
             if seen:
-                text += ("\n\n[On-device OCR read this text from the attached image. "
-                         "Use it to answer; do not claim you cannot access files:]\n" + "\n\n".join(seen))
+                text += ("\n\n[This attached image was already read on this device with OCR. "
+                         "The text below IS the image content. Use it to answer the user's request "
+                         "now; do not call any file tool, do not ask for the image path, and do not "
+                         "say the image is still being processed:]\n" + "\n\n".join(seen))
             else:
                 text += ("\n\n[An image is attached but the on-device OCR found no readable text. "
-                         "If the user asks about its contents, ask them to describe what matters.]")
+                         "Tell the user that, and ask them to describe or type what matters. Do not "
+                         "ask for the image path and do not say it is still being processed.]")
         stripped.append({"role": message.get("role"), "content": text})
     return stripped
 

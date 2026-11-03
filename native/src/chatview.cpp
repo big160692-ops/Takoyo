@@ -552,9 +552,10 @@ void ChatView::addImageCard(QWidget *column, const QJsonObject &meta)
     };
     card->content()->addWidget(image, 0, Qt::AlignLeft);
 
-    auto *caption = new QLabel(QStringLiteral("Takoyo Art · ")
-                                   + util::shorten(meta.value(QStringLiteral("prompt")).toString(), 48),
-                               card);
+    QString label = meta.value(QStringLiteral("label")).toString();
+    if (label.isEmpty())
+        label = meta.value(QStringLiteral("prompt")).toString();
+    auto *caption = new QLabel(QStringLiteral("Takoyo Art · ") + util::shorten(label, 48), card);
     caption->setFont(theme::font(9));
     caption->setStyleSheet(QStringLiteral("color:#8B8B8F;background:transparent;"));
     card->content()->addWidget(caption);

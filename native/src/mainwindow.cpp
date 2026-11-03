@@ -40,6 +40,7 @@
 #include <QVector>
 
 #include <functional>
+#include <algorithm>
 
 // A host strip that slides a fixed-width panel in and out of view. The panel
 // is right-anchored for the sidebar and left-anchored for the art panel, which
@@ -160,7 +161,10 @@ const QString kNoProjectPrompt = QStringLiteral(
     "science or code, answer from what you know and do not fetch or search for anything.");
 
 const QString kImageTools = QStringLiteral(
-    "If the user asks you to visualise something, prefer the <takoyo-image> tool above over describing it.");
+    "If the user asks you to visualise something, prefer the <takoyo-image> tool above over describing it.\n"
+    "When the user attaches an image, Takoyo has already read its text on this device and placed that text "
+    "in the user's message. Use that text directly: never call read_file on an image, never ask for its "
+    "path, and never say the image is still being processed.");
 
 // Small local models sometimes answer a direct question with a plan ("I'll fetch
 // a corpus… in the next step") instead of the answer. Such replies are detected
@@ -174,7 +178,39 @@ bool isDeferredPromise(const QString &text)
                        "I(?:'ll| will| am going to) (?:fetch|look|search|check|list|"
                        "gather|retrieve|download|pull|read)|"
                        "let me (?:fetch|look|search|check|find|retrieve|download)|"
-                       "let(?:'s| us) (?:fetch|look up|look for|search|check|review|read|use))\\b"),
+                       "let(?:'s| us) (?:fetch|look up|look for|search|check|review|read|use)|"
+                       "once the (?:image|file) is (?:processed|ready|loaded)|"
+                       "the (?:image|file) is (?:being )?(?:processed|opened|read)|"
+                       "I(?:'ll| will) (?:analy[sz]e|examine|open|view|process|use) (?:the|this|that) "
+                       "(?:attached )?image|"
+                       "I will proceed from there)\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    return re.match(text).hasMatch();
+}
+
+bool isImagePath(const QString &path)
+{
+    static const QStringList extensions = {
+        QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+        QStringLiteral("gif"), QStringLiteral("webp"), QStringLiteral("bmp"),
+        QStringLiteral("tiff"),
+    };
+    return extensions.contains(QFileInfo(path).suffix().toLower());
+}
+
+// An attached image is read on-device before the reply, so these lines mean the
+// model ignored the extracted text and asked for a file it already has.
+bool isImageConfusion(const QString &text)
+{
+    if (text.size() > 700)
+        return false;
+    static const QRegularExpression re(
+        QStringLiteral("\\b(?:(?:could not|couldn't|cannot|can't|unable to) (?:open|read|access|view|see|process) "
+                       "(?:the|this|that|your) (?:attached )?image|"
+                       "(?:issue|problem|error) (?:with )?(?:(?:opening|reading|accessing|processing) )?"
+                       "(?:the|this|that|your) (?:attached )?image|"
+                       "(?:provide|send|share|give) (?:me )?(?:the|its) (?:path|location|file)|"
+                       "image (?:file )?(?:could not|couldn't|cannot|can't) be (?:opened|read|accessed|processed))\\b"),
         QRegularExpression::CaseInsensitiveOption);
     return re.match(text).hasMatch();
 }
@@ -1263,17 +1299,50 @@ void MainWindow::finishReply(const QString &cid, int index, const QString &full,
         chat_->scrollToBottom();
     }
 
-    if (!cancelled && !cleaned.trimmed().isEmpty() && parsed.fileRequests.isEmpty()
-        && parsed.edits.isEmpty() && parsed.imagePrompts.isEmpty() && promiseRetries_ < 2
-        && isDeferredPromise(cleaned)) {
+    bool imageTurn = false;
+    for (int i = index - 1; i >= 0; --i) {
+        const QJsonObject message = before.at(i).toObject();
+        if (message.value(QStringLiteral("role")).toString() != QLatin1String("user")
+            || message.value(QStringLiteral("hidden")).toBool())
+            continue;
+        imageTurn = message.value(QStringLiteral("attachment")).toObject()
+                        .value(QStringLiteral("kind")).toString() == QLatin1String("image");
+        break;
+    }
+
+    QList<util::FileRequest> requests = parsed.fileRequests;
+    if (imageTurn) {
+        // The attached image was already read on-device and its text is in the
+        // prompt, so a read_file call for it can only fail and poison the next
+        // reply with "could not open the image".
+        requests.erase(std::remove_if(requests.begin(), requests.end(),
+                                      [](const util::FileRequest &request) {
+                                          return isImagePath(request.path);
+                                      }),
+                       requests.end());
+    }
+    const bool imageToolDropped = requests.size() != parsed.fileRequests.size();
+    const bool promiseLike =
+        cleaned.trimmed().isEmpty()
+            ? imageToolDropped
+            : isDeferredPromise(cleaned) || (imageTurn && isImageConfusion(cleaned));
+
+    if (!cancelled && parsed.edits.isEmpty() && parsed.imagePrompts.isEmpty() && requests.isEmpty()
+        && promiseRetries_ < 2 && promiseLike) {
         QJsonObject retryConv = conversations_.get(cid);
         QJsonArray history = retryConv.value(QStringLiteral("messages")).toArray();
         if (index >= 0 && index < history.size())
             history.removeAt(index);
-        const QString correction = QStringLiteral(
-            "\n\nAnswer directly now. Do not fetch, read or search for anything, and do not say "
-            "you will do something later. Give the best answer you know; if it is uncertain, say "
-            "so in one sentence.");
+        const QString correction =
+            imageTurn ? QStringLiteral(
+                            "\n\nThe attached image was already read on this device. Its text is in "
+                            "this message. Answer my request now using that text, and do not call "
+                            "read_file, do not ask for the image path and do not say the image is "
+                            "still being processed.")
+                      : QStringLiteral(
+                            "\n\nAnswer directly now. Do not fetch, read or search for anything, and "
+                            "do not say you will do something later. Give the best answer you know; "
+                            "if it is uncertain, say so in one sentence.");
         bool appended = false;
         for (int i = history.size() - 1; i >= 0; --i) {
             QJsonObject message = history.at(i).toObject();
@@ -1308,8 +1377,8 @@ void MainWindow::finishReply(const QString &cid, int index, const QString &full,
         }
     }
 
-    if (!cancelled && !parsed.fileRequests.isEmpty() && readRounds_ < 3) {
-        followUpWithFiles(cid, parsed.fileRequests);
+    if (!cancelled && !requests.isEmpty() && readRounds_ < 3) {
+        followUpWithFiles(cid, requests);
         if (streaming_) {
             syncBusy();
             refreshSidebar();
@@ -1402,10 +1471,13 @@ void MainWindow::finishImage(const QJsonObject &meta, const QJsonObject &context
             fields.insert(QStringLiteral("images"), images);
             fields.insert(QStringLiteral("error"), QJsonValue::Null);
             if (direct) {
+                QString label = meta.value(QStringLiteral("label")).toString();
+                if (label.isEmpty())
+                    label = prompt;
                 fields.insert(QStringLiteral("content"),
                               QStringLiteral("Here’s **%1** — painted with Takoyo Art. "
                                              "Click the image to open it full size.")
-                                  .arg(util::shorten(prompt, 80)));
+                                  .arg(util::shorten(label, 80)));
             }
             conv = conversations_.updateMessage(cid, index, fields);
             if (hasConversation_ && conversationId() == cid) {

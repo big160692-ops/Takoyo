@@ -199,31 +199,73 @@ void applyGeometry(QWidget *window, const QString &geometry)
     }
 }
 
+namespace {
+
+// "create an image of a person" -> "a person", so the art caption and the
+// painter both get the subject instead of the whole command.
+QString imageSubjectText(const QString &input)
+{
+    QString text = input.trimmed();
+    static const QRegularExpression verb(
+        QStringLiteral("^\\s*(?:(?:please|hey|hi|ok|okay)\\s+)?"
+                       "(?:(?:can|could|would|will)\\s+you\\s+|"
+                       "i\\s+(?:want|need|would\\s+like)\\s+(?:you\\s+to\\s+)?|let'?s\\s+)?"
+                       "(?:generate|create|make|draw|paint|render|illustrate|sketch|design|show|give)\\b[:,]?\\s*"),
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression noun(
+        QStringLiteral("^\\s*(?:me\\s+)?(?:a|an|the|some)?\\s*"
+                       "(?:quick\\s+|simple\\s+|nice\\s+|beautiful\\s+)?"
+                       "(?:images?|pictures?|photos?|photographs?|drawings?|illustrations?|artwork|art|"
+                       "posters?|wallpapers?|renders?|sketch(?:es)?|paintings?|logos?|icons?)\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression connector(
+        QStringLiteral("^\\s*(?:of|with|showing|that\\s+shows?|featuring|about|for)\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    for (int pass = 0; pass < 5; ++pass) {
+        const QString before = text;
+        text.replace(verb, QString()).replace(noun, QString()).replace(connector, QString());
+        text = text.trimmed();
+        if (text == before)
+            break;
+    }
+    static const QRegularExpression please(QStringLiteral("\\bplease\\b"),
+                                           QRegularExpression::CaseInsensitiveOption);
+    text.replace(please, QString());
+    text = text.simplified();
+    while (!text.isEmpty() && QStringLiteral(".,!?;:").contains(text.back()))
+        text.chop(1);
+    return text.trimmed();
+}
+
+} // namespace
+
 QString imageRequestPrompt(const QString &input)
 {
     const QString text = input.trimmed();
     if (text.isEmpty())
         return QString();
+    const auto subject = [](const QString &value) {
+        const QString cleaned = imageSubjectText(value);
+        return cleaned.isEmpty() ? QStringLiteral("a calm Takoyo landscape") : cleaned;
+    };
     static const QRegularExpression command(
         QStringLiteral("^\\s*/(?:image|img|art|draw|paint)\\b[:,]?\\s*"),
         QRegularExpression::CaseInsensitiveOption);
     const QRegularExpressionMatch cm = command.match(text);
-    if (cm.hasMatch() && cm.capturedStart() == 0) {
-        const QString rest = text.mid(cm.capturedEnd()).trimmed();
-        return rest.isEmpty() ? QStringLiteral("a calm Takoyo landscape") : rest;
-    }
+    if (cm.hasMatch() && cm.capturedStart() == 0)
+        return subject(text.mid(cm.capturedEnd()));
     const QString low = text.toLower();
     static const QRegularExpression paint(QStringLiteral("\\b(draw|paint|illustrate|sketch|render)\\b"));
     if (paint.match(low).hasMatch())
-        return text;
+        return subject(text);
     static const QRegularExpression make(
         QStringLiteral("\\b(generate|create|make|design)\\b[^.!?\\n]{0,34}\\b(image|picture|illustration|artwork|art|poster|wallpaper|logo)\\b"));
     if (make.match(low).hasMatch())
-        return text;
+        return subject(text);
     static const QRegularExpression lead(
         QStringLiteral("^(an?\\s+)?(image|picture|illustration|photo|poster|wallpaper)\\s+(of|showing)\\b"));
     if (lead.match(low).hasMatch())
-        return text;
+        return subject(text);
     return QString();
 }
 

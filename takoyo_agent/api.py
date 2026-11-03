@@ -102,6 +102,9 @@ def _image_payload(item: dict, host: str, b64: bool = False) -> dict:
         "width": item.get("width", 0),
         "height": item.get("height", 0),
         "seed": item.get("seed"),
+        "style": item.get("style", ""),
+        "label": item.get("label", ""),
+        "subject": item.get("subject"),
         "created": item.get("created", 0),
     }
     if b64:

@@ -44,6 +44,8 @@ COLOR_WORDS: dict[str, tuple[int, int, int]] = {
 }
 
 _SUBJECTS: list[tuple[str, tuple[str, ...]]] = [
+    ("person", ("person", "people", "human", "man", "woman", "boy", "girl", "gentleman",
+                "lady", "portrait", "selfie")),
     ("octopus", ("octopus", "takoyo")),
     ("rocket", ("rocket", "spaceship", "spacecraft")),
     ("car", ("car", "automobile", "sedan")),
@@ -66,6 +68,7 @@ _SUBJECTS: list[tuple[str, tuple[str, ...]]] = [
 ]
 
 DEFAULT_COLORS: dict[str, tuple[int, int, int]] = {
+    "person": (92, 130, 200),
     "car": (210, 65, 65),
     "cat": (236, 170, 95),
     "dog": (170, 120, 80),
@@ -619,6 +622,48 @@ def _tree(d, cx, base_y, s, base, rng):
         _dot(d, px, py, pr, base, 255, ink, max(2, int(s * 0.007)))
 
 
+def _person(d, cx, base_y, s, base, rng):
+    ink = _ink(base)
+    skin = (233, 196, 168)
+    skin_ink = (150, 112, 88)
+    hair = (78, 62, 52)
+    pants = _shade(base, 0.62)
+    light = _tint(base, 0.35)
+    _shadow(d, cx, base_y, s * 0.62)
+    for sign in (-1, 1):
+        d.rounded_rectangle((cx + sign * s * 0.09 - s * 0.045, base_y - s * 0.34,
+                             cx + sign * s * 0.09 + s * 0.045, base_y - s * 0.05),
+                            radius=s * 0.03, fill=(*pants, 255), outline=(*ink, 255),
+                            width=max(3, int(s * 0.010)))
+        d.ellipse((cx + sign * s * 0.09 - s * 0.075, base_y - s * 0.08,
+                   cx + sign * s * 0.09 + s * 0.075, base_y + s * 0.005),
+                  fill=(*_shade(pants, 0.7), 255), outline=(*ink, 255),
+                  width=max(2, int(s * 0.008)))
+    d.rounded_rectangle((cx - s * 0.19, base_y - s * 0.72, cx + s * 0.19, base_y - s * 0.32),
+                        radius=s * 0.08, fill=(*base, 255), outline=(*ink, 255),
+                        width=max(3, int(s * 0.011)))
+    d.line((cx, base_y - s * 0.70, cx, base_y - s * 0.34), fill=(*light, 110),
+           width=max(2, int(s * 0.008)))
+    for sign in (-1, 1):
+        ax = cx + sign * s * 0.235
+        d.rounded_rectangle((ax - s * 0.045, base_y - s * 0.70, ax + s * 0.045, base_y - s * 0.40),
+                            radius=s * 0.035, fill=(*base, 255), outline=(*ink, 255),
+                            width=max(3, int(s * 0.009)))
+        _dot(d, ax, base_y - s * 0.37, s * 0.045, skin, 255, skin_ink,
+             max(2, int(s * 0.007)))
+    d.rectangle((cx - s * 0.045, base_y - s * 0.77, cx + s * 0.045, base_y - s * 0.69),
+                fill=(*skin, 255))
+    hy = base_y - s * 0.86
+    d.ellipse((cx - s * 0.115, hy - s * 0.12, cx + s * 0.115, hy + s * 0.12),
+              fill=(*skin, 255), outline=(*skin_ink, 255), width=max(2, int(s * 0.007)))
+    d.chord((cx - s * 0.125, hy - s * 0.145, cx + s * 0.125, hy + s * 0.055),
+            start=180, end=360, fill=(*hair, 255), outline=(*hair, 255))
+    for sign in (-1, 1):
+        _dot(d, cx + sign * s * 0.042, hy - s * 0.01, s * 0.015, (45, 40, 40))
+    d.arc((cx - s * 0.04, hy - s * 0.01, cx + s * 0.04, hy + s * 0.055), 20, 160,
+          fill=(*skin_ink, 255), width=max(2, int(s * 0.006)))
+
+
 def _octopus(d, cx, base_y, s, base, rng):
     ink = _ink(base)
     light = _tint(base, 0.55)
@@ -642,6 +687,7 @@ def _octopus(d, cx, base_y, s, base, rng):
 
 
 _DRAWERS = {
+    "person": _person,
     "car": _car,
     "cat": _cat,
     "dog": _dog,
