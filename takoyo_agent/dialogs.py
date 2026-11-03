@@ -470,14 +470,17 @@ class SettingsDialog(BaseDialog):
             )
             self.base_field.pack(fill="x", pady=(0, 10))
         elif provider != "local":
+            saved = bool(self.app.config.api_key(provider))
             self.key_field = LabeledField(
                 self.conn_box,
                 label=f"{info['label']} API key",
-                value=self.app.config.api_key(provider),
-                placeholder="Paste your key",
+                value="",
+                placeholder="Saved key — type a new key to replace it" if saved else "Paste your key",
                 secret=True,
                 height=44,
-                hint="Stored only on this computer.",
+                hint="The saved key stays hidden. Type a new key to replace it."
+                if saved
+                else "Stored only on this computer.",
             )
             self.key_field.pack(fill="x", pady=(0, 10))
             url = info.get("key_url", "")
@@ -664,7 +667,9 @@ class SettingsDialog(BaseDialog):
             if provider == "ollama" and self.base_field is not None:
                 values["ollama_base_url"] = self.base_field.get().strip() or "http://127.0.0.1:11434"
             elif self.key_field is not None:
-                values[f"{provider}_api_key"] = self.key_field.get().strip()
+                typed_key = self.key_field.get().strip()
+                if typed_key:
+                    values[f"{provider}_api_key"] = typed_key
         image_key = self._image_label_to_key.get(self.image_engine.get(), "takoyo")
         values["image_provider"] = image_key
         values["image_size"] = self.image_size.get().strip() or "1024x1280"

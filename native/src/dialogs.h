@@ -5,6 +5,7 @@
 
 class Config;
 class ProjectStore;
+class TextButton;
 class QCheckBox;
 class QComboBox;
 class QLabel;
@@ -12,6 +13,7 @@ class QLineEdit;
 class QListWidget;
 class QPlainTextEdit;
 class QSpinBox;
+class QWidget;
 
 class ProjectFilesDialog : public QDialog {
     Q_OBJECT
@@ -67,6 +69,8 @@ private:
     QLineEdit *model_ = nullptr;
     QLabel *keyLabel_ = nullptr;
     QLineEdit *key_ = nullptr;
+    QWidget *keyRow_ = nullptr;
+    TextButton *replaceKey_ = nullptr;
     QComboBox *imageProvider_ = nullptr;
     QComboBox *imageSize_ = nullptr;
     QCheckBox *autoApply_ = nullptr;

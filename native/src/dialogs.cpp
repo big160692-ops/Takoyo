@@ -419,7 +419,15 @@ SettingsDialog::SettingsDialog(Config *config, QWidget *parent)
     key_ = new QLineEdit(this);
     key_->setEchoMode(QLineEdit::Password);
     key_->setPlaceholderText(QStringLiteral("Paste your key"));
-    form->addRow(keyLabel_, key_);
+    keyRow_ = new QWidget(this);
+    auto *keyLayout = new QHBoxLayout(keyRow_);
+    keyLayout->setContentsMargins(0, 0, 0, 0);
+    keyLayout->setSpacing(8);
+    keyLayout->addWidget(key_, 1);
+    replaceKey_ = new TextButton(QStringLiteral("Replace key"), TextButton::Variant::Secondary, 32, keyRow_);
+    replaceKey_->setFontSize(9);
+    keyLayout->addWidget(replaceKey_);
+    form->addRow(keyLabel_, keyRow_);
 
     imageProvider_ = new Combo(this);
     imageProvider_->addItem(QStringLiteral("Takoyo Art"), QStringLiteral("takoyo"));
@@ -469,6 +477,11 @@ SettingsDialog::SettingsDialog(Config *config, QWidget *parent)
     outer->addLayout(buttons);
 
     connect(folder, &QAbstractButton::clicked, this, []() { util::openPath(util::takoyoHome()); });
+    connect(replaceKey_, &QAbstractButton::clicked, this, [this]() {
+        key_->clear();
+        key_->setReadOnly(false);
+        key_->setFocus();
+    });
     connect(cancel, &QAbstractButton::clicked, this, &QDialog::reject);
     connect(save, &QAbstractButton::clicked, this, &SettingsDialog::save);
     connect(provider_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -495,9 +508,16 @@ void SettingsDialog::loadProvider()
     model_->setPlaceholderText(provider == QLatin1String("local") ? QStringLiteral("qwen2.5-1.5b")
                                                                   : QStringLiteral("Model name"));
     const bool needsKey = provider != QLatin1String("local") && provider != QLatin1String("ollama");
+    const bool stored = needsKey && !config_->apiKey(provider).isEmpty();
     keyLabel_->setVisible(needsKey);
-    key_->setVisible(needsKey);
-    key_->setText(needsKey ? config_->apiKey(provider) : QString());
+    keyRow_->setVisible(needsKey);
+    replaceKey_->setVisible(stored);
+    // Never load the saved key into the field: it stays hidden on screen and in
+    // screenshots, and Replace key is needed to type a new one.
+    key_->clear();
+    key_->setReadOnly(stored);
+    key_->setPlaceholderText(stored ? QStringLiteral("Saved key — press Replace key")
+                                    : QStringLiteral("Paste your key"));
 }
 
 void SettingsDialog::save()
@@ -507,8 +527,12 @@ void SettingsDialog::save()
     config_->set(QStringLiteral("provider"), provider, false);
     if (!model.isEmpty())
         config_->set(provider + QStringLiteral("_model"), model, false);
-    if (provider != QLatin1String("local") && provider != QLatin1String("ollama"))
-        config_->set(provider + QStringLiteral("_api_key"), key_->text().trimmed(), false);
+    // An empty field means "keep the saved key"; only a typed value replaces it.
+    if (provider != QLatin1String("local") && provider != QLatin1String("ollama")) {
+        const QString typed = key_->text().trimmed();
+        if (!typed.isEmpty())
+            config_->set(provider + QStringLiteral("_api_key"), typed, false);
+    }
     config_->set(QStringLiteral("image_provider"), imageProvider_->currentData().toString(), false);
     config_->set(QStringLiteral("image_size"), imageSize_->currentText(), false);
     config_->set(QStringLiteral("auto_apply_edits"), autoApply_->isChecked(), false);
