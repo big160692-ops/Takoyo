@@ -36,9 +36,10 @@ QString errorMessage(const QJsonObject &object)
 // ChatStream
 // ---------------------------------------------------------------------------
 ChatStream::ChatStream(QNetworkAccessManager *network, Endpoint endpoint, const QJsonObject &payload,
-                       Recover recover, QObject *parent)
+                       const QString &token, Recover recover, QObject *parent)
     : QObject(parent)
     , network_(network)
+    , token_(token)
     , endpoint_(std::move(endpoint))
     , payload_(payload)
     , recover_(std::move(recover))
@@ -48,8 +49,10 @@ ChatStream::ChatStream(QNetworkAccessManager *network, Endpoint endpoint, const 
 
 void ChatStream::send()
 {
+    receivedDone_ = false;
     QNetworkRequest request(endpoint_());
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + token_.toUtf8());
     reply_ = network_->post(request, QJsonDocument(payload_).toJson(QJsonDocument::Compact));
     connect(reply_, &QNetworkReply::readyRead, this, &ChatStream::onReadyRead);
     connect(reply_, &QNetworkReply::finished, this, &ChatStream::onFinished);
@@ -80,32 +83,46 @@ void ChatStream::onReadyRead()
     while (split >= 0) {
         const QByteArray event = buffer_.left(split);
         buffer_.remove(0, split + 2);
-        for (const QByteArray &line : event.split('\n')) {
-            if (!line.startsWith("data:"))
-                continue;
-            QByteArray data = line.mid(5).trimmed();
-            if (data == "[DONE]") {
-                if (!done_) {
-                    done_ = true;
-                    emit finished(full_, cancelled_);
-                }
-                continue;
-            }
-            const QJsonDocument doc = QJsonDocument::fromJson(data);
-            if (!doc.isObject())
-                continue;
-            const QJsonArray choices = doc.object().value(QStringLiteral("choices")).toArray();
-            if (choices.isEmpty())
-                continue;
-            const QString piece = choices.first().toObject()
-                                      .value(QStringLiteral("delta")).toObject()
-                                      .value(QStringLiteral("content")).toString();
-            if (!piece.isEmpty()) {
-                full_ += piece;
-                emit chunk(piece);
-            }
-        }
+        processEvent(event);
         split = buffer_.indexOf("\n\n");
+    }
+}
+
+void ChatStream::processEvent(const QByteArray &event)
+{
+    for (QByteArray line : event.split('\n')) {
+        line = line.trimmed();
+        if (!line.startsWith("data:"))
+            continue;
+        const QByteArray data = line.mid(5).trimmed();
+        if (data == "[DONE]") {
+            receivedDone_ = true;
+            continue;
+        }
+        const QJsonDocument doc = QJsonDocument::fromJson(data);
+        if (!doc.isObject())
+            continue;
+        const QJsonObject object = doc.object();
+        if (object.contains(QStringLiteral("error"))) {
+            const QJsonValue error = object.value(QStringLiteral("error"));
+            if (error.isObject())
+                streamError_ = error.toObject().value(QStringLiteral("message")).toString();
+            else if (error.isString())
+                streamError_ = error.toString();
+            if (streamError_.isEmpty())
+                streamError_ = QStringLiteral("The response stream returned an error.");
+            continue;
+        }
+        const QJsonArray choices = object.value(QStringLiteral("choices")).toArray();
+        if (choices.isEmpty())
+            continue;
+        const QString piece = choices.first().toObject()
+                                  .value(QStringLiteral("delta")).toObject()
+                                  .value(QStringLiteral("content")).toString();
+        if (!piece.isEmpty()) {
+            full_ += piece;
+            emit chunk(piece);
+        }
     }
 }
 
@@ -117,36 +134,27 @@ void ChatStream::onFinished()
     QNetworkReply *reply = reply_;
     reply_ = nullptr;
     buffer_ += reply->readAll();
-    if (!buffer_.isEmpty()) {
-        for (const QByteArray &line : buffer_.split('\n')) {
-            if (!line.startsWith("data:"))
-                continue;
-            const QByteArray data = line.mid(5).trimmed();
-            if (data == "[DONE]")
-                continue;
-            const QJsonDocument doc = QJsonDocument::fromJson(data);
-            if (!doc.isObject())
-                continue;
-            const QJsonArray choices = doc.object().value(QStringLiteral("choices")).toArray();
-            if (choices.isEmpty())
-                continue;
-            const QString piece = choices.first().toObject()
-                                      .value(QStringLiteral("delta")).toObject()
-                                      .value(QStringLiteral("content")).toString();
-            if (!piece.isEmpty()) {
-                full_ += piece;
-                emit chunk(piece);
-            }
-        }
+    if (!buffer_.isEmpty())
+        processEvent(buffer_);
+    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    if (!cancelled_ && !streamError_.isEmpty()) {
+        reply->deleteLater();
+        emit failed(streamError_, full_);
+        return;
     }
-    if (reply->error() != QNetworkReply::NoError && !cancelled_) {
+    if (!cancelled_ && reply->error() == QNetworkReply::NoError && status < 400 && !receivedDone_) {
+        reply->deleteLater();
+        emit failed(QStringLiteral("The response stream ended before completion."), full_);
+        return;
+    }
+    if ((reply->error() != QNetworkReply::NoError || status >= 400) && !cancelled_) {
         const QNetworkReply::NetworkError error = reply->error();
         const bool connectionProblem = error == QNetworkReply::ConnectionRefusedError
             || error == QNetworkReply::RemoteHostClosedError
             || error == QNetworkReply::HostNotFoundError;
         // The engine can be stopped while the app is open. Wake it back up and
         // resend instead of leaving the chat with a dead-end error.
-        if (connectionProblem && full_.isEmpty() && recover_ && retries_ < 12) {
+        if (connectionProblem && full_.isEmpty() && streamError_.isEmpty() && recover_ && retries_ < 12) {
             ++retries_;
             const bool restarting = recover_();
             reply->deleteLater();
@@ -155,7 +163,6 @@ void ChatStream::onFinished()
             QTimer::singleShot(restarting ? 900 : 1200, this, &ChatStream::retry);
             return;
         }
-        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const QJsonDocument doc = QJsonDocument::fromJson(buffer_);
         QString message;
         if (doc.isObject())
@@ -170,7 +177,7 @@ void ChatStream::onFinished()
                 message = reply->errorString();
         }
         reply->deleteLater();
-        emit failed(message);
+        emit failed(message, full_);
         return;
     }
     reply->deleteLater();
@@ -186,6 +193,7 @@ Backend::Backend(Config *config, QObject *parent)
     , network_(new QNetworkAccessManager(this))
     , probeTimer_(new QTimer(this))
 {
+    apiToken_ = config_->str(QStringLiteral("api_token"));
     probeTimer_->setSingleShot(true);
     connect(probeTimer_, &QTimer::timeout, this, [this]() { probeHealth(++attempts_); });
 }
@@ -210,6 +218,12 @@ QString Backend::baseUrl() const
     return QStringLiteral("http://%1:%2").arg(host.isEmpty() ? QStringLiteral("127.0.0.1") : host).arg(port);
 }
 
+void Backend::authorize(QNetworkRequest &request) const
+{
+    request.setRawHeader("Authorization",
+                         QByteArrayLiteral("Bearer ") + apiToken_.toUtf8());
+}
+
 int Backend::freePort() const
 {
     QTcpServer server;
@@ -231,6 +245,7 @@ void Backend::start()
 void Backend::probeHealth(int attempt)
 {
     QNetworkRequest request(QUrl(baseUrl_ + QStringLiteral("/health")));
+    authorize(request);
     request.setTransferTimeout(1200);
     QNetworkReply *reply = network_->get(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply, attempt]() {
@@ -404,6 +419,7 @@ void Backend::refreshStatus()
     if (!ready_)
         return;
     QNetworkRequest request(QUrl(baseUrl_ + QStringLiteral("/health")));
+    authorize(request);
     request.setTransferTimeout(1500);
     QNetworkReply *reply = network_->get(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
@@ -416,13 +432,22 @@ void Backend::refreshStatus()
 
 void Backend::reloadConfig()
 {
-    if (!ready_)
+    if (!ready_) {
+        apiToken_ = config_->str(QStringLiteral("api_token"));
         return;
+    }
     QNetworkRequest request(QUrl(baseUrl_ + QStringLiteral("/config/reload")));
+    authorize(request);
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     request.setTransferTimeout(3000);
     QNetworkReply *reply = network_->post(request, QByteArrayLiteral("{}"));
-    connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const bool ok = reply->error() == QNetworkReply::NoError && status < 400;
+        reply->deleteLater();
+        if (ok)
+            apiToken_ = config_->str(QStringLiteral("api_token"));
+    });
 }
 
 ChatStream *Backend::chat(const QJsonArray &messages, const QString &provider, const QString &model,
@@ -437,7 +462,7 @@ ChatStream *Backend::chat(const QJsonArray &messages, const QString &provider, c
     payload.insert(QStringLiteral("max_tokens"), maxTokens);
     return new ChatStream(network_,
                           [this]() { return QUrl(baseUrl_ + QStringLiteral("/v1/chat/completions")); },
-                          payload, [this]() { return recoverEngine(); }, this);
+                          payload, apiToken_, [this]() { return recoverEngine(); }, this);
 }
 
 void Backend::generateImage(const QString &prompt, const QString &size, const QString &provider,
@@ -450,6 +475,7 @@ void Backend::generateImage(const QString &prompt, const QString &size, const QS
     if (!provider.isEmpty())
         payload.insert(QStringLiteral("provider"), provider);
     QNetworkRequest request(QUrl(baseUrl_ + QStringLiteral("/images/generations")));
+    authorize(request);
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     request.setTransferTimeout(180000);
     QNetworkReply *reply = network_->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
@@ -481,6 +507,7 @@ void Backend::shutdown()
         return;
     if (ready_ && ownsBackend_) {
         QNetworkRequest request(QUrl(baseUrl_ + QStringLiteral("/local/stop")));
+        authorize(request);
         request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
         QNetworkReply *reply = network_->post(request, QByteArray("{}"));
         QEventLoop loop;

@@ -41,6 +41,9 @@ QString hexSuffix(int length)
     return QString::number(value, 16).rightJustified(length, QChar('0')).right(length);
 }
 
+bool canonicalProjectRoot(const QString &projectsDirectory, const QString &projectPath, QString *canonicalRoot);
+bool resolveProjectPath(const QString &root, const QString &candidate, bool allowMissing, QString *resolved);
+
 const QSet<QString> &skipDirs()
 {
     static const QSet<QString> dirs = {
@@ -177,7 +180,26 @@ QJsonObject ConversationStore::get(const QString &id) const
     const QString path = pathFor(id);
     if (path.isEmpty())
         return {};
-    return util::readJson(path);
+    bool ok = false;
+    QJsonObject data = util::readJson(path, &ok);
+    if (!ok || !data.value(QStringLiteral("messages")).isArray()) {
+        if (QFileInfo::exists(path))
+            quarantine(path);
+        return {};
+    }
+    return data;
+}
+
+void ConversationStore::quarantine(const QString &path) const
+{
+    const QString binDir = QDir(util::trashDir()).filePath(QStringLiteral("conversations/corrupt"));
+    QDir().mkpath(binDir);
+    const QString target = QDir(binDir).filePath(
+        QFileInfo(path).completeBaseName() + QStringLiteral("-")
+        + QString::number(QDateTime::currentMSecsSinceEpoch()) + QStringLiteral("-")
+        + hexSuffix(4) + QStringLiteral(".corrupt"));
+    if (QFile::rename(path, target))
+        ++recoveryCount_;
 }
 
 void ConversationStore::write(QJsonObject &conversation) const
@@ -249,6 +271,72 @@ void ConversationStore::remove(const QString &id)
     QFile::rename(path, target);
 }
 
+bool ConversationStore::exportAll(const QString &path, QString *error) const
+{
+    QJsonArray items;
+    const QDir dir(directory_);
+    for (const QString &file : dir.entryList({QStringLiteral("*.json")}, QDir::Files)) {
+        const QJsonObject conversation = get(QFileInfo(file).completeBaseName());
+        if (!conversation.isEmpty()) {
+            items.append(conversation);
+        } else {
+            const QString damaged = dir.filePath(file);
+            if (QFileInfo::exists(damaged))
+                quarantine(damaged);
+        }
+    }
+    QJsonObject bundle;
+    bundle.insert(QStringLiteral("format"), QStringLiteral("takoyo-conversations"));
+    bundle.insert(QStringLiteral("version"), 1);
+    bundle.insert(QStringLiteral("conversations"), items);
+    if (!util::writeJsonAtomic(path, bundle)) {
+        if (error)
+            *error = QStringLiteral("Could not write the conversation backup.");
+        return false;
+    }
+    return true;
+}
+
+int ConversationStore::restoreFrom(const QString &path, QString *error)
+{
+    bool ok = false;
+    const QJsonObject bundle = util::readJson(path, &ok);
+    const QJsonArray items = bundle.value(QStringLiteral("conversations")).toArray();
+    if (!ok || bundle.value(QStringLiteral("format")).toString() != QLatin1String("takoyo-conversations")
+        || bundle.value(QStringLiteral("version")).toInt() != 1 || items.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("This is not a valid Takoyo conversation backup.");
+        return -1;
+    }
+    int restored = 0;
+    for (const QJsonValue &value : items) {
+        if (!value.isObject())
+            continue;
+        QJsonObject conversation = value.toObject();
+        if (!conversation.value(QStringLiteral("messages")).isArray())
+            continue;
+        QString id = conversation.value(QStringLiteral("id")).toString();
+        QString target = pathFor(id);
+        if (target.isEmpty())
+            continue;
+        if (QFileInfo::exists(target)) {
+            id = newConversationId();
+            target = pathFor(id);
+            while (QFileInfo::exists(target)) {
+                id = newConversationId();
+                target = pathFor(id);
+            }
+            conversation.insert(QStringLiteral("id"), id);
+        }
+        write(conversation);
+        if (QFileInfo::exists(target))
+            ++restored;
+    }
+    if (restored == 0 && error)
+        *error = QStringLiteral("The backup contained no restorable conversations.");
+    return restored;
+}
+
 QJsonObject ConversationStore::latestForProject(const QString &projectId)
 {
     const QList<ConversationSummary> items = summaries(projectId);
@@ -262,9 +350,13 @@ QList<ConversationSummary> ConversationStore::summaries(const QString &projectId
     const QDir dir(directory_);
     const QStringList files = dir.entryList({QStringLiteral("*.json")}, QDir::Files);
     for (const QString &file : files) {
-        const QJsonObject data = util::readJson(dir.filePath(file));
-        if (data.isEmpty())
+        const QJsonObject data = get(QFileInfo(file).completeBaseName());
+        if (data.isEmpty()) {
+            const QString damaged = dir.filePath(file);
+            if (QFileInfo::exists(damaged))
+                quarantine(damaged);
             continue;
+        }
         const QString pid = data.value(QStringLiteral("project_id")).toString();
         if (!projectId.isEmpty() && projectId != QLatin1String("__all__") && pid != projectId)
             continue;
@@ -344,6 +436,9 @@ QList<ProjectSummary> ProjectStore::list(const QString &query) const
     const QStringList entries = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
     for (const QString &name : entries) {
         const QFileInfo info(dir.filePath(name));
+        QString canonicalRoot;
+        if (!canonicalProjectRoot(directory_, info.absoluteFilePath(), &canonicalRoot))
+            continue;
         QJsonObject meta = readMeta(name);
         ProjectSummary summary;
         summary.id = name;
@@ -354,7 +449,7 @@ QList<ProjectSummary> ProjectStore::list(const QString &query) const
         if (!needle.isEmpty() && !summary.name.toLower().contains(needle)
             && !summary.description.toLower().contains(needle))
             continue;
-        summary.fileCount = projectFiles(info.absoluteFilePath(), 100000).size();
+        summary.fileCount = projectFiles(canonicalRoot, 100000).size();
         items << summary;
     }
     std::sort(items.begin(), items.end(), [](const ProjectSummary &a, const ProjectSummary &b) {
@@ -369,7 +464,8 @@ bool ProjectStore::get(const QString &id, ProjectSummary *out) const
     if (!valid.match(id).hasMatch())
         return false;
     const QDir root(directory_);
-    if (!QFileInfo(root.filePath(id)).isDir())
+    QString canonicalRoot;
+    if (!canonicalProjectRoot(directory_, root.filePath(id), &canonicalRoot))
         return false;
     const QJsonObject meta = readMeta(id);
     ProjectSummary summary;
@@ -378,7 +474,7 @@ bool ProjectStore::get(const QString &id, ProjectSummary *out) const
     summary.description = meta.value(QStringLiteral("description")).toString();
     summary.updated = meta.value(QStringLiteral("updated")).toDouble();
     summary.created = meta.value(QStringLiteral("created")).toDouble();
-    summary.fileCount = projectFiles(root.filePath(id), 100000).size();
+    summary.fileCount = projectFiles(canonicalRoot, 100000).size();
     if (out)
         *out = summary;
     return true;
@@ -469,15 +565,76 @@ bool validateRelative(const QString &relative, QString *clean, QString *error)
     return true;
 }
 
+bool pathWithin(const QString &root, const QString &path)
+{
+    const QString normalizedRoot = QDir::cleanPath(root);
+    const QString normalizedPath = QDir::cleanPath(path);
+    const QString prefix = normalizedRoot.endsWith(QDir::separator())
+                               ? normalizedRoot
+                               : normalizedRoot + QDir::separator();
+#ifdef Q_OS_WIN
+    return normalizedPath.compare(normalizedRoot, Qt::CaseInsensitive) == 0
+        || normalizedPath.startsWith(prefix, Qt::CaseInsensitive);
+#else
+    return normalizedPath == normalizedRoot || normalizedPath.startsWith(prefix);
+#endif
+}
+
+bool canonicalProjectRoot(const QString &projectsDirectory, const QString &projectPath, QString *canonicalRoot)
+{
+    if (QFileInfo(projectPath).isSymLink())
+        return false;
+    const QString projectsRoot = QFileInfo(projectsDirectory).canonicalFilePath();
+    const QString root = QFileInfo(projectPath).canonicalFilePath();
+    if (projectsRoot.isEmpty() || root.isEmpty() || !pathWithin(projectsRoot, root)
+        || (pathWithin(projectsRoot, root) && pathWithin(root, projectsRoot)))
+        return false;
+    if (canonicalRoot)
+        *canonicalRoot = root;
+    return true;
+}
+
+bool resolveProjectPath(const QString &root, const QString &candidate, bool allowMissing, QString *resolved)
+{
+    QString current = QFileInfo(candidate).absoluteFilePath();
+    QStringList suffix;
+    QFileInfo info(current);
+    while (!info.exists()) {
+        if (info.isSymLink())
+            return false;
+        const QString name = info.fileName();
+        const QString parent = info.dir().absolutePath();
+        if (name.isEmpty() || parent == current)
+            return false;
+        suffix.prepend(name);
+        current = parent;
+        info.setFile(current);
+    }
+
+    if (!allowMissing && !suffix.isEmpty())
+        return false;
+    QString canonical = info.canonicalFilePath();
+    if (canonical.isEmpty() || !pathWithin(root, canonical))
+        return false;
+    for (const QString &part : suffix)
+        canonical = QDir(canonical).filePath(part);
+    if (!pathWithin(root, canonical))
+        return false;
+    if (resolved)
+        *resolved = canonical;
+    return true;
+}
+
 } // namespace
 
 QStringList ProjectStore::filePaths(const QString &id) const
 {
     QStringList paths;
     const QString root = QDir(directory_).filePath(id);
-    if (!QFileInfo(root).isDir())
+    QString canonicalRoot;
+    if (!canonicalProjectRoot(directory_, root, &canonicalRoot))
         return paths;
-    for (const ProjectFile &file : projectFiles(root, 100000))
+    for (const ProjectFile &file : projectFiles(canonicalRoot, 100000))
         paths << file.path;
     paths.sort(Qt::CaseInsensitive);
     return paths;
@@ -488,13 +645,19 @@ bool ProjectStore::fileExists(const QString &id, const QString &relative) const
     QString clean;
     if (!validateRelative(relative, &clean, nullptr))
         return false;
-    return QFileInfo(QDir(directory_).filePath(id + QStringLiteral("/") + clean)).isFile();
+    const QString projectPath = QDir(directory_).filePath(id);
+    QString root;
+    QString resolved;
+    return canonicalProjectRoot(directory_, projectPath, &root)
+        && resolveProjectPath(root, QDir(root).filePath(clean), false, &resolved)
+        && QFileInfo(resolved).isFile();
 }
 
 QString ProjectStore::readText(const QString &id, const QString &relative, QString *error) const
 {
-    const QString root = QDir(directory_).filePath(id);
-    if (!QFileInfo(root).isDir()) {
+    const QString projectPath = QDir(directory_).filePath(id);
+    QString root;
+    if (!canonicalProjectRoot(directory_, projectPath, &root)) {
         if (error)
             *error = QStringLiteral("Project not found");
         return QString();
@@ -502,7 +665,13 @@ QString ProjectStore::readText(const QString &id, const QString &relative, QStri
     QString clean;
     if (!validateRelative(relative, &clean, error))
         return QString();
-    QFile file(root + QStringLiteral("/") + clean);
+    QString resolved;
+    if (!resolveProjectPath(root, QDir(root).filePath(clean), false, &resolved)) {
+        if (error)
+            *error = QStringLiteral("Path escapes the project");
+        return QString();
+    }
+    QFile file(resolved);
     if (!file.open(QIODevice::ReadOnly)) {
         if (error)
             *error = QStringLiteral("Could not read %1").arg(clean);
@@ -524,8 +693,9 @@ QString ProjectStore::readText(const QString &id, const QString &relative, QStri
 bool ProjectStore::writeText(const QString &id, const QString &relative, const QString &content,
                              QString *error) const
 {
-    const QString root = QDir(directory_).filePath(id);
-    if (!QFileInfo(root).isDir()) {
+    const QString projectPath = QDir(directory_).filePath(id);
+    QString root;
+    if (!canonicalProjectRoot(directory_, projectPath, &root)) {
         if (error)
             *error = QStringLiteral("Project not found");
         return false;
@@ -533,6 +703,12 @@ bool ProjectStore::writeText(const QString &id, const QString &relative, const Q
     QString clean;
     if (!validateRelative(relative, &clean, error))
         return false;
+    QString resolved;
+    if (!resolveProjectPath(root, QDir(root).filePath(clean), true, &resolved)) {
+        if (error)
+            *error = QStringLiteral("Path escapes the project");
+        return false;
+    }
     QString text = content;
     text.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
     if (text.toUtf8().size() > 2000000) {
@@ -540,9 +716,14 @@ bool ProjectStore::writeText(const QString &id, const QString &relative, const Q
             *error = QStringLiteral("File is too large to save");
         return false;
     }
-    const QFileInfo info(root + QStringLiteral("/") + clean);
+    const QFileInfo info(resolved);
     QDir().mkpath(info.absolutePath());
-    QFile file(info.absoluteFilePath());
+    if (!resolveProjectPath(root, info.absoluteFilePath(), true, &resolved)) {
+        if (error)
+            *error = QStringLiteral("Path escapes the project");
+        return false;
+    }
+    QFile file(resolved);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         if (error)
             *error = QStringLiteral("Could not write %1").arg(clean);
@@ -561,7 +742,16 @@ bool ProjectStore::deleteFile(const QString &id, const QString &relative, QStrin
     QString clean;
     if (!validateRelative(relative, &clean, error))
         return false;
-    const QFileInfo info(QDir(directory_).filePath(id + QStringLiteral("/") + clean));
+    const QString projectPath = QDir(directory_).filePath(id);
+    QString root;
+    QString resolved;
+    if (!canonicalProjectRoot(directory_, projectPath, &root)
+        || !resolveProjectPath(root, QDir(root).filePath(clean), false, &resolved)) {
+        if (error)
+            *error = QStringLiteral("Path escapes the project");
+        return false;
+    }
+    const QFileInfo info(resolved);
     if (!info.isFile())
         return true;
     const QString binDir = QDir(util::trashDir()).filePath(QStringLiteral("files/") + id);
@@ -585,8 +775,11 @@ QString ProjectStore::contextForAi(const QString &id, const QString &prompt, int
     if (!get(id, &meta))
         return QString();
 
+    QString root;
+    if (!canonicalProjectRoot(directory_, QDir(directory_).filePath(id), &root))
+        return QString();
     QList<ProjectFile> all;
-    for (const ProjectFile &file : projectFiles(QDir(directory_).filePath(id), 300)) {
+    for (const ProjectFile &file : projectFiles(root, 300)) {
         if (!isSecret(file.path))
             all << file;
     }
@@ -627,7 +820,10 @@ QString ProjectStore::contextForAi(const QString &id, const QString &prompt, int
             break;
         if (!file.text || file.size > 200000 || seen.contains(file.path))
             continue;
-        QFile handle(QDir(directory_).filePath(id + QStringLiteral("/") + file.path));
+        QString resolved;
+        if (!resolveProjectPath(root, QDir(root).filePath(file.path), false, &resolved))
+            continue;
+        QFile handle(resolved);
         if (!handle.open(QIODevice::ReadOnly))
             continue;
         const QByteArray data = handle.read(6000);

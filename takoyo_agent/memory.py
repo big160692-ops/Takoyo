@@ -30,6 +30,33 @@ class ConversationStore:
         self.dir = Path(directory) if directory else CONVERSATIONS_DIR
         self.dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._recovery_errors: list[str] = []
+
+    def _read_conversation(self, path: Path) -> dict | None:
+        try:
+            data = json.loads(path.read_text("utf-8"))
+            messages = data.get("messages") if isinstance(data, dict) else None
+            if isinstance(data, dict) and isinstance(messages, list) and all(
+                isinstance(message, dict) for message in messages
+            ):
+                data["title"] = str(data.get("title") or "New chat")
+                data["project_id"] = str(data.get("project_id") or "")
+                return data
+            raise ValueError("conversation has an invalid shape")
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            quarantine = TRASH_DIR / "conversations" / "corrupt"
+            quarantine.mkdir(parents=True, exist_ok=True)
+            target = quarantine / f"{path.stem}-{int(time.time() * 1000)}.corrupt"
+            try:
+                os.replace(path, target)
+                self._recovery_errors.append(f"{path.name}: {exc}")
+            except OSError as move_error:
+                self._recovery_errors.append(f"{path.name}: {exc}; quarantine failed: {move_error}")
+            return None
+
+    def take_recovery_errors(self) -> list[str]:
+        errors, self._recovery_errors = self._recovery_errors, []
+        return errors
 
     # ------------------------------------------------------------------ #
     def _path(self, cid: str) -> Path:
@@ -65,12 +92,12 @@ class ConversationStore:
             return None
         try:
             path = self._path(cid)
-            if not path.exists():
-                return None
-            data = json.loads(path.read_text("utf-8"))
-        except Exception:
+        except ValueError:
             return None
-        if not isinstance(data, dict) or not isinstance(data.get("messages"), list):
+        if not path.exists():
+            return None
+        data = self._read_conversation(path)
+        if data is None:
             return None
         data.setdefault("title", "New chat")
         data.setdefault("project_id", "")
@@ -124,11 +151,8 @@ class ConversationStore:
         query = (query or "").strip().lower()
         items: list[dict] = []
         for path in self.dir.glob("*.json"):
-            try:
-                data = json.loads(path.read_text("utf-8"))
-            except Exception:
-                continue
-            if not isinstance(data, dict):
+            data = self._read_conversation(path)
+            if data is None:
                 continue
             pid = data.get("project_id", "")
             if project_id is not None and project_id != "__all__" and pid != project_id:
@@ -169,3 +193,45 @@ class ConversationStore:
             except Exception:
                 pass
         return count
+
+    def export_to(self, destination: str | Path) -> int:
+        conversations = []
+        for path in sorted(self.dir.glob("*.json")):
+            data = self._read_conversation(path)
+            if data is not None:
+                conversations.append(data)
+        payload = {"format": "takoyo-conversations", "version": 1, "conversations": conversations}
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=1), "utf-8")
+        os.replace(temporary, destination)
+        return len(conversations)
+
+    def backup(self, destination: str | Path) -> int:
+        return self.export_to(destination)
+
+    def restore_from(self, source: str | Path) -> int:
+        try:
+            payload = json.loads(Path(source).read_text("utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Could not read conversation backup: {exc}") from exc
+        if (not isinstance(payload, dict) or payload.get("format") != "takoyo-conversations"
+                or payload.get("version") != 1 or not isinstance(payload.get("conversations"), list)):
+            raise ValueError("Unsupported conversation backup format")
+        restored = 0
+        for original in payload["conversations"]:
+            if (not isinstance(original, dict) or not isinstance(original.get("messages"), list)
+                    or not all(isinstance(message, dict) for message in original["messages"])):
+                continue
+            conversation = dict(original)
+            cid = str(conversation.get("id", ""))
+            try:
+                path = self._path(cid)
+            except ValueError:
+                continue
+            if path.exists():
+                conversation["id"] = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+            self._write(conversation)
+            restored += 1
+        return restored

@@ -2,6 +2,9 @@
 
 #include "util.h"
 
+#include <QJsonArray>
+#include <QRandomGenerator>
+
 namespace {
 QJsonObject defaults()
 {
@@ -26,6 +29,8 @@ QJsonObject defaults()
     o.insert(QStringLiteral("auto_apply_edits"), false);
     o.insert(QStringLiteral("api_host"), QStringLiteral("127.0.0.1"));
     o.insert(QStringLiteral("api_port"), 8765);
+    o.insert(QStringLiteral("api_token"), QString());
+    o.insert(QStringLiteral("api_allowed_origins"), QJsonArray());
     o.insert(QStringLiteral("api_auto_start"), false);
     o.insert(QStringLiteral("local_port"), 8766);
     o.insert(QStringLiteral("sidebar_open"), false);
@@ -49,6 +54,13 @@ Config::Config()
     const QJsonObject stored = util::readJson(path_);
     for (auto it = stored.begin(); it != stored.end(); ++it)
         data_.insert(it.key(), it.value());
+    if (data_.value(QStringLiteral("api_token")).toString().isEmpty()) {
+        QString token;
+        for (int i = 0; i < 4; ++i)
+            token += QString::number(QRandomGenerator::system()->generate64(), 16).rightJustified(16, QChar('0'));
+        data_.insert(QStringLiteral("api_token"), token);
+        save();
+    }
 }
 
 QJsonValue Config::value(const QString &key) const

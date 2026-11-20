@@ -74,5 +74,8 @@ private:
     QComboBox *imageProvider_ = nullptr;
     QComboBox *imageSize_ = nullptr;
     QCheckBox *autoApply_ = nullptr;
+    QLineEdit *apiHost_ = nullptr;
+    QLineEdit *apiToken_ = nullptr;
+    QLineEdit *apiOrigins_ = nullptr;
     QSpinBox *apiPort_ = nullptr;
 };

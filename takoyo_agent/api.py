@@ -1,11 +1,14 @@
-"""Takoyo's local, token-free HTTP API (standard library only)."""
+"""Takoyo's local, bearer-token-protected HTTP API (standard library only)."""
 
 from __future__ import annotations
 
 import base64
+import hmac
+import ipaddress
 import json
 import mimetypes
 import os
+import secrets
 import shutil
 import threading
 import time
@@ -24,6 +27,27 @@ MAX_BODY = 24 * 1024 * 1024
 _STARTED_AT = time.time()
 _LOCAL_JOBS: dict = {}
 _JOBS_LOCK = threading.Lock()
+
+
+def _configured_api_token(config: Config) -> str:
+    return str(config.get("api_token", "") or os.environ.get("TAKOYO_API_TOKEN", "")).strip()
+
+
+def _is_authorized(config: Config, authorization: str) -> bool:
+    token = _configured_api_token(config)
+    return bool(token) and hmac.compare_digest(authorization, f"Bearer {token}")
+
+
+def _allowed_origin(config: Config, origin: str) -> bool:
+    configured = config.get("api_allowed_origins", [])
+    return bool(origin) and origin != "*" and isinstance(configured, list) and origin in configured
+
+
+def _is_loopback_address(address: str) -> bool:
+    try:
+        return ipaddress.ip_address(address).is_loopback
+    except ValueError:
+        return False
 
 
 def _normalize_content(content):
@@ -76,6 +100,18 @@ def _writable_under(rel: str) -> Path:
     allowed = [PROJECTS_DIR.resolve(), WORKSPACE_DIR.resolve()]
     if not any(target == a or a in target.parents for a in allowed):
         raise ApiError("Writes are limited to the workspace and projects folders", 403)
+    return target
+
+
+def _readable_under(rel: str) -> Path:
+    raw = (rel or ".").strip()
+    if raw in ("", "."):
+        target = WORKSPACE_DIR.resolve()
+    else:
+        target = _safe_under(HOME, raw)
+    allowed = [PROJECTS_DIR.resolve(), WORKSPACE_DIR.resolve()]
+    if not any(target == root or root in target.parents for root in allowed):
+        raise ApiError("Reads are limited to the workspace and projects folders", 403)
     return target
 
 
@@ -136,10 +172,19 @@ class TakoyoAPIHandler(BaseHTTPRequestHandler):
                 pass
 
     def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin", "")
+        if origin and _allowed_origin(self.config, origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("X-Takoyo", "local")
+
+    def _require_authorization(self) -> bool:
+        if _is_authorized(self.config, self.headers.get("Authorization", "")):
+            return True
+        self._error("A valid Bearer token is required", 401)
+        return False
 
     def _send_json(self, data, status: int = 200):
         raw = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
@@ -182,6 +227,8 @@ class TakoyoAPIHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        if not self._require_authorization():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
         query = urllib.parse.parse_qs(parsed.query)
@@ -191,7 +238,7 @@ class TakoyoAPIHandler(BaseHTTPRequestHandler):
                     {
                         "name": "Takoyo",
                         "version": "1.0",
-                        "auth": "none (keep this on 127.0.0.1)",
+                        "auth": "bearer token required",
                         "endpoints": [
                             "GET /health", "GET /models", "GET /v1/models",
                             "POST /chat", "POST /v1/chat/completions",
@@ -237,6 +284,8 @@ class TakoyoAPIHandler(BaseHTTPRequestHandler):
             return self._error(f"Unexpected error: {exc}", 500)
 
     def do_POST(self):
+        if not self._require_authorization():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
         try:
@@ -546,7 +595,7 @@ class TakoyoAPIHandler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------------ #
     def _list_files(self, rel: str) -> dict:
-        target = _safe_under(HOME, rel)
+        target = _readable_under(rel)
         if not target.exists():
             raise ApiError("Path not found", 404)
         if not target.is_dir():
@@ -574,7 +623,7 @@ class TakoyoAPIHandler(BaseHTTPRequestHandler):
     def _read_file(self, rel: str) -> dict:
         if not rel:
             raise ApiError("Provide 'path'")
-        target = _safe_under(HOME, rel)
+        target = _readable_under(rel)
         if not target.is_file():
             raise ApiError("File not found", 404)
         data = target.read_bytes()
@@ -662,8 +711,10 @@ class TakoyoHTTPServer(ThreadingHTTPServer):
 def start_api(config: Config | None = None, host: str | None = None, port: int | None = None):
     ensure_dirs()
     config = config or Config()
+    if not _configured_api_token(config):
+        config.set("api_token", secrets.token_urlsafe(32))
     host = host or str(config.get("api_host", "127.0.0.1"))
-    port = int(port or config.get("api_port", 8765) or 8765)
+    port = int(config.get("api_port", 8765) if port is None else port)
     conversations = ConversationStore()
     projects = ProjectStore()
     images = image_gen.ImageGenerator(config)
@@ -678,6 +729,13 @@ def start_api(config: Config | None = None, host: str | None = None, port: int |
     Handler.images = images
 
     server = TakoyoHTTPServer((host, port), Handler)
+    loopback = _is_loopback_address(server.server_address[0])
+    if not loopback and not _configured_api_token(config):
+        server.server_close()
+        raise ValueError(
+            "Binding the Local API to a network interface requires api_token "
+            "(or the TAKOYO_API_TOKEN environment variable)."
+        )
     thread = threading.Thread(target=server.serve_forever, daemon=True, name="takoyo-api")
     thread.start()
     return server, thread
@@ -701,7 +759,7 @@ def run_api_server(host: str | None = None, port: int | None = None) -> None:
     server, _thread = start_api(config=config, host=host, port=port)
     address = server.server_address
     print(f"Takoyo API listening on http://{address[0]}:{address[1]}")
-    print("No authentication: keep it on 127.0.0.1. Ctrl+C to stop.")
+    print("Bearer-token authentication is enabled.")
     try:
         while True:
             time.sleep(1)

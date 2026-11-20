@@ -15,6 +15,8 @@ next step" or "in the next turn": either use a tool in this reply, or answer dir
 You can create images. To do that, emit exactly:
 <takoyo-image>a detailed image prompt</takoyo-image>
 Takoyo renders it in the art panel on the right.
+Do not use the image tool for flowcharts, diagrams, mind maps, UML, schematics, or other
+structured labeled visuals. Takoyo Art cannot render those accurately; offer Mermaid code instead.
 """
 
 PROJECT_TOOLS = """
@@ -37,6 +39,7 @@ Rules for edits:
 
 IMAGE_TOOLS = """
 If the user asks you to visualise something, prefer the <takoyo-image> tool above over describing it.
+Do not use it for flowcharts, diagrams, mind maps, UML, schematics, or other structured labeled visuals.
 """
 
 

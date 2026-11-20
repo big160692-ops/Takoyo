@@ -130,8 +130,8 @@ const QString kProjectTools = QStringLiteral(
     "{\"tool\": \"read_file\", \"path\": \"relative/path.ext\"}\n"
     "</takoyo-tool>\n"
     "Takoyo fetches the file and sends it to you right away. Use {\"tool\": \"list_dir\", \"path\": \"folder\"} "
-    "to list a folder. Paths may be absolute (for example C:/Users/you/notes.txt) or relative to "
-    "the project root.\n"
+    "to list a folder. Paths must be relative to the project root. Never read or edit outside the "
+    "active project.\n"
     "When you need to replace or create a file, emit exactly this block (valid JSON, full file content):\n"
     "<takoyo-tool>\n"
     "{\"tool\": \"write_file\", \"path\": \"relative/path.ext\", \"content\": \"the complete new file content\"}\n"
@@ -150,8 +150,8 @@ const QString kProjectTools = QStringLiteral(
 const QString kNoProjectPrompt = QStringLiteral(
     "No project is open. If the user wants to build or edit a project, suggest starting one "
     "from the sidebar so you can touch the files directly.\n"
-    "You can still read files from this computer, but only when the user asks about a specific "
-    "file or folder. If its contents are missing from your context, do not apologize and never "
+    "You may only read files inside Takoyo's workspace folder (~/.takoyo/workspace). "
+    "Never read paths elsewhere on the machine. If its contents are missing from your context, do not apologize and never "
     "say you cannot read files. Reply with exactly this block and nothing else:\n"
     "<takoyo-tool>\n"
     "{\"tool\": \"read_file\", \"path\": \"C:/Users/you/file.txt\"}\n"
@@ -161,7 +161,10 @@ const QString kNoProjectPrompt = QStringLiteral(
     "science or code, answer from what you know and do not fetch or search for anything.");
 
 const QString kImageTools = QStringLiteral(
-    "If the user asks you to visualise something, prefer the <takoyo-image> tool above over describing it.\n"
+    "If the user asks you to visualise something, prefer the <takoyo-image> tool above over describing it, "
+    "except for flowcharts, diagrams, mind maps, UML, schematics, or other structured labeled visuals. "
+    "For those, do not call the image tool; explain that Takoyo Art cannot render structured diagrams and "
+    "offer Mermaid code instead.\n"
     "When the user attaches an image, Takoyo has already read its text on this device and placed that text "
     "in the user's message. Use that text directly: never call read_file on an image, never ask for its "
     "path, and never say the image is still being processed.");
@@ -438,6 +441,11 @@ MainWindow::MainWindow(QWidget *parent)
     connect(settingsShortcut, &QShortcut::activated, this, &MainWindow::openSettings);
     auto *sidebarShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+B")), this);
     connect(sidebarShortcut, &QShortcut::activated, this, &MainWindow::toggleSidebar);
+    auto *composerShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+L")), this);
+    connect(composerShortcut, &QShortcut::activated, this, [this]() {
+        Composer *composer = stack_->currentWidget() == chat_ ? chat_->composer() : home_->composer();
+        composer->focusInput();
+    });
 
     refreshSidebar();
     showHome();
@@ -1001,12 +1009,12 @@ void MainWindow::beginReply(const QString &cid, int index, const QJsonArray &mes
         }
         finishReply(cid, index, full, cancelled);
     });
-    connect(stream_, &ChatStream::failed, this, [this, cid, index](const QString &message) {
+    connect(stream_, &ChatStream::failed, this, [this, cid, index](const QString &message, const QString &partial) {
         if (stream_) {
             stream_->deleteLater();
             stream_ = nullptr;
         }
-        finishError(cid, index, message);
+        finishError(cid, index, message, partial);
     });
 }
 
@@ -1064,7 +1072,24 @@ QString MainWindow::lastUserText(const QString &cid) const
 
 QString MainWindow::readRequestedFiles(const QList<util::FileRequest> &requests) const
 {
-    const QString root = hasProject_ ? QDir(util::projectsDir()).filePath(project_.id) : QString();
+    const QString root = hasProject_ ? QDir(util::projectsDir()).filePath(project_.id)
+                                     : QDir(util::takoyoHome()).filePath(QStringLiteral("workspace"));
+    QDir().mkpath(root);
+    const QString canonicalRoot = QFileInfo(root).canonicalFilePath();
+    const auto isWithinRoot = [&canonicalRoot](const QString &path) {
+        const QString canonical = QFileInfo(path).canonicalFilePath();
+        if (canonical.isEmpty() || canonicalRoot.isEmpty())
+            return false;
+        const QString prefix = canonicalRoot.endsWith(QDir::separator())
+                                   ? canonicalRoot
+                                   : canonicalRoot + QDir::separator();
+#ifdef Q_OS_WIN
+        return canonical.compare(canonicalRoot, Qt::CaseInsensitive) == 0
+            || canonical.startsWith(prefix, Qt::CaseInsensitive);
+#else
+        return canonical == canonicalRoot || canonical.startsWith(prefix);
+#endif
+    };
     QStringList chunks;
     int budget = 48000;
     for (const util::FileRequest &request : requests) {
@@ -1074,9 +1099,13 @@ QString MainWindow::readRequestedFiles(const QList<util::FileRequest> &requests)
         if (raw.isEmpty())
             continue;
         QFileInfo info(raw);
-        if (!info.isAbsolute() && !root.isEmpty())
+        if (!info.isAbsolute())
             info = QFileInfo(QDir(root).filePath(raw));
         const QString absolute = info.absoluteFilePath();
+        if (!isWithinRoot(absolute)) {
+            chunks << QStringLiteral("[Takoyo can only read files inside the active project or its workspace folder.]");
+            continue;
+        }
         if (request.listing) {
             const QDir dir(absolute);
             if (!dir.exists()) {
@@ -1136,10 +1165,12 @@ QString MainWindow::readRequestedFiles(const QList<util::FileRequest> &requests)
 
 QStringList MainWindow::mentionedFilePaths(const QString &text) const
 {
-    QString root;
+    QString root = hasProject_ ? QDir(util::projectsDir()).filePath(project_.id)
+                               : QDir(util::takoyoHome()).filePath(QStringLiteral("workspace"));
+    QDir().mkpath(root);
+    const QString canonicalRoot = QFileInfo(root).canonicalFilePath();
     QStringList projectFiles;
     if (hasProject_) {
-        root = QDir(util::projectsDir()).filePath(project_.id);
         projectFiles = projects_.filePaths(project_.id);
     }
 
@@ -1149,14 +1180,26 @@ QStringList MainWindow::mentionedFilePaths(const QString &text) const
             value.chop(1);
         return value;
     };
-    const auto resolve = [&root](const QString &candidate, QFileInfo *info) {
+    const auto resolve = [&root, &canonicalRoot](const QString &candidate, QFileInfo *info) {
         if (candidate.isEmpty())
             return false;
         QFileInfo file(candidate);
-        if (!file.isAbsolute() && !root.isEmpty())
+        if (!file.isAbsolute())
             file = QFileInfo(QDir(root).filePath(candidate));
         if (!file.isFile())
             return false;
+        const QString canonical = file.canonicalFilePath();
+        const QString prefix = canonicalRoot.endsWith(QDir::separator())
+                                   ? canonicalRoot
+                                   : canonicalRoot + QDir::separator();
+#ifdef Q_OS_WIN
+        if (canonical.compare(canonicalRoot, Qt::CaseInsensitive) != 0
+            && !canonical.startsWith(prefix, Qt::CaseInsensitive))
+            return false;
+#else
+        if (canonical != canonicalRoot && !canonical.startsWith(prefix))
+            return false;
+#endif
         *info = file;
         return true;
     };
@@ -1246,10 +1289,17 @@ void MainWindow::finishReply(const QString &cid, int index, const QString &full,
     }
 
     const util::ParsedReply parsed = util::parseReply(full);
+    QStringList imagePrompts = parsed.imagePrompts;
     QString cleaned = parsed.cleaned;
+    if (!imagePrompts.isEmpty() && util::isStructuredVisualRequest(lastUserText(cid))) {
+        imagePrompts.clear();
+        cleaned = QStringLiteral(
+            "Takoyo Art cannot produce a structured, labeled diagram. No image was generated; "
+            "I can provide the diagram as Mermaid code instead.");
+    }
     if (cleaned.trimmed().isEmpty()) {
-        if (!parsed.imagePrompts.isEmpty())
-            cleaned = QStringLiteral("Made you an image of **%1**.").arg(parsed.imagePrompts.first());
+        if (!imagePrompts.isEmpty())
+            cleaned = QStringLiteral("Made you an image of **%1**.").arg(imagePrompts.first());
         else if (!parsed.edits.isEmpty())
             cleaned = QStringLiteral("I've prepared the change — apply it when you're ready.");
         else if (cancelled)
@@ -1327,7 +1377,7 @@ void MainWindow::finishReply(const QString &cid, int index, const QString &full,
             ? imageToolDropped
             : isDeferredPromise(cleaned) || (imageTurn && isImageConfusion(cleaned));
 
-    if (!cancelled && parsed.edits.isEmpty() && parsed.imagePrompts.isEmpty() && requests.isEmpty()
+    if (!cancelled && parsed.edits.isEmpty() && imagePrompts.isEmpty() && requests.isEmpty()
         && promiseRetries_ < 2 && promiseLike) {
         QJsonObject retryConv = conversations_.get(cid);
         QJsonArray history = retryConv.value(QStringLiteral("messages")).toArray();
@@ -1386,24 +1436,24 @@ void MainWindow::finishReply(const QString &cid, int index, const QString &full,
         }
     }
 
-    if (!parsed.imagePrompts.isEmpty()) {
-        art_->setGenerating(parsed.imagePrompts.first());
+    if (!imagePrompts.isEmpty()) {
+        art_->setGenerating(imagePrompts.first());
         showArt(true, true);
-        const int count = qMin(3, parsed.imagePrompts.size());
+        const int count = qMin(3, imagePrompts.size());
         for (int i = 0; i < count; ++i)
-            beginImage(parsed.imagePrompts.at(i), cid, index, false);
+            beginImage(imagePrompts.at(i), cid, index, false);
     }
     syncBusy();
     refreshSidebar();
 }
 
-void MainWindow::finishError(const QString &cid, int index, const QString &message)
+void MainWindow::finishError(const QString &cid, int index, const QString &message, const QString &partial)
 {
     QJsonObject conv = conversations_.get(cid);
     if (!conv.isEmpty() && index >= 0 && index < conv.value(QStringLiteral("messages")).toArray().size()) {
         const QString provider = config_.str(QStringLiteral("provider"));
         QJsonObject fields;
-        fields.insert(QStringLiteral("content"), QString());
+        fields.insert(QStringLiteral("content"), partial);
         fields.insert(QStringLiteral("error"), message);
         fields.insert(QStringLiteral("error_kind"),
                       provider == QLatin1String("local") ? QStringLiteral("local") : QStringLiteral("provider"));

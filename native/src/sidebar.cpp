@@ -195,6 +195,7 @@ Sidebar::Sidebar(QWidget *parent)
     auto *gear = new IconButton(QStringLiteral("gear"), 15, status);
     gear->setColor(theme::MUTED);
     gear->setHoverColor(theme::INK);
+    gear->setToolTip(QStringLiteral("Settings"));
     connect(gear, &QAbstractButton::clicked, this, &Sidebar::settingsRequested);
     statusLayout->addWidget(gear);
     connect(status, &HoverRow::clicked, this, &Sidebar::settingsRequested);
@@ -252,6 +253,17 @@ void Sidebar::applyQuery()
     }
     for (const ConversationSummary &summary : recentItems.mid(0, 30))
         buildRecentRow(recentsBox_, summary, summary.id == selectedConversation_);
+    if (conversations.recoveryCount() > 0) {
+        const QString message = conversations.recoveryCount() == 1
+                                    ? QStringLiteral("A damaged chat was moved to Takoyo trash for recovery.")
+                                    : QStringLiteral("%1 damaged chats were moved to Takoyo trash for recovery.")
+                                          .arg(conversations.recoveryCount());
+        auto *warning = makeLabel(message,
+                                  9, theme::DANGER, QStringLiteral("regular"), this);
+        warning->setWordWrap(true);
+        warning->setContentsMargins(10, 4, 10, 4);
+        recentsBox_->addWidget(warning);
+    }
 }
 
 void Sidebar::clearBox(QVBoxLayout *box)
@@ -286,6 +298,7 @@ void Sidebar::buildProjectRow(QVBoxLayout *box, const ProjectSummary &project, b
     auto *more = new IconButton(QStringLiteral("more"), 14, row);
     more->setColor(theme::MUTED);
     more->setHoverColor(theme::INK);
+    more->setToolTip(QStringLiteral("Project options"));
     connect(more, &QAbstractButton::clicked, this, [this, row, project]() {
         emit projectMenuRequested(project.id, row->mapToGlobal(QPoint(row->width() - 4, row->height())));
     });

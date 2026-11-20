@@ -38,6 +38,8 @@ Composer::Composer(QWidget *parent)
 
     edit_ = new QPlainTextEdit(this);
     edit_->setFrameShape(QFrame::NoFrame);
+    edit_->setAccessibleName(QStringLiteral("Message"));
+    edit_->setAccessibleDescription(QStringLiteral("Type a message. Press Enter to send, Shift+Enter for a new line."));
     edit_->setFont(theme::font(15));
     edit_->setStyleSheet(QStringLiteral(
         "QPlainTextEdit{background:transparent;border:none;color:#0B0B0D;"
@@ -106,6 +108,7 @@ Composer::Composer(QWidget *parent)
     auto *chipClose = new IconButton(QStringLiteral("close"), 11, chipBody);
     chipClose->setColor(theme::MUTED);
     chipClose->setHoverColor(theme::INK);
+    chipClose->setToolTip(QStringLiteral("Remove attachment"));
     connect(chipClose, &QAbstractButton::clicked, this, &Composer::clearAttachment);
     chipInner->addWidget(chipClose);
     chipLayout->addWidget(chipBody);

@@ -152,8 +152,36 @@ IconButton::IconButton(const QString &icon, int iconSize, QWidget *parent)
 {
     setCursor(Qt::PointingHandCursor);
     setAttribute(Qt::WA_Hover, true);
-    setFocusPolicy(Qt::NoFocus);
+    setFocusPolicy(Qt::StrongFocus);
+    static const QHash<QString, QString> accessibleLabels = {
+        {QStringLiteral("arrow-up"), QStringLiteral("Send message")},
+        {QStringLiteral("stop"), QStringLiteral("Stop generating")},
+        {QStringLiteral("paperclip"), QStringLiteral("Attach a file")},
+        {QStringLiteral("mic"), QStringLiteral("Voice input")},
+        {QStringLiteral("close"), QStringLiteral("Close")},
+        {QStringLiteral("copy"), QStringLiteral("Copy")},
+        {QStringLiteral("pencil"), QStringLiteral("Apply changes")},
+        {QStringLiteral("arrow-down"), QStringLiteral("Jump to latest message")},
+        {QStringLiteral("plus"), QStringLiteral("Create new item")},
+        {QStringLiteral("sidebar"), QStringLiteral("Toggle sidebar")},
+        {QStringLiteral("gear"), QStringLiteral("Settings")},
+        {QStringLiteral("more"), QStringLiteral("More options")},
+        {QStringLiteral("external"), QStringLiteral("Open image")},
+        {QStringLiteral("download"), QStringLiteral("Save image")},
+        {QStringLiteral("refresh"), QStringLiteral("Regenerate image")},
+        {QStringLiteral("image"), QStringLiteral("Art panel")},
+    };
+    const QString label = accessibleLabels.value(icon, QStringLiteral("Action"));
+    setAccessibleName(label);
+    setAccessibleDescription(label);
     setFixedSize(iconSize + pad_ * 2, iconSize + pad_ * 2);
+}
+
+void IconButton::setToolTip(const QString &toolTip)
+{
+    QAbstractButton::setToolTip(toolTip);
+    setAccessibleName(toolTip);
+    setAccessibleDescription(toolTip);
 }
 
 void IconButton::setIconName(const QString &icon)
@@ -215,6 +243,11 @@ void IconButton::paintEvent(QPaintEvent *)
     const qreal side = iconSize_;
     const QRectF iconRect((width() - side) / 2.0, (height() - side) / 2.0, side, side);
     icons::paint(painter, icon_, iconRect, tint);
+    if (hasFocus()) {
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(theme::INK, 1.4));
+        painter.drawRoundedRect(full.adjusted(1.5, 1.5, -1.5, -1.5), 7, 7);
+    }
 }
 
 void IconButton::enterEvent(QEnterEvent *event)

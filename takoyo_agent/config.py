@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import tempfile
 import threading
 from pathlib import Path
@@ -54,6 +55,8 @@ DEFAULTS: dict = {
     "auto_apply_edits": False,
     "api_host": "127.0.0.1",
     "api_port": 8765,
+    "api_token": "",
+    "api_allowed_origins": [],
     "api_auto_start": False,
     "local_port": 8766,
     "local_context": 8192,
@@ -75,6 +78,8 @@ class Config:
         self._lock = threading.RLock()
         self._data = dict(DEFAULTS)
         self.load()
+        if not str(self.get("api_token", "") or "").strip():
+            self.set("api_token", os.environ.get("TAKOYO_API_TOKEN") or secrets.token_urlsafe(32))
 
     # -- io -----------------------------------------------------------------
     def load(self) -> None:

@@ -34,12 +34,17 @@ public:
     QJsonObject updateMessage(const QString &id, int index, const QJsonObject &fields);
     void rename(const QString &id, const QString &title);
     void remove(const QString &id);
+    bool exportAll(const QString &path, QString *error = nullptr) const;
+    int restoreFrom(const QString &path, QString *error = nullptr);
+    int recoveryCount() const { return recoveryCount_; }
     QJsonObject latestForProject(const QString &projectId);
     QList<ConversationSummary> summaries(const QString &projectId = QString(), const QString &query = QString()) const;
 
 private:
     QString directory_;
+    mutable int recoveryCount_ = 0;
     QString pathFor(const QString &id) const;
+    void quarantine(const QString &path) const;
     void write(QJsonObject &conversation) const;
 };
 

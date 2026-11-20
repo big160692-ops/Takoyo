@@ -242,7 +242,7 @@ QString imageSubjectText(const QString &input)
 QString imageRequestPrompt(const QString &input)
 {
     const QString text = input.trimmed();
-    if (text.isEmpty())
+    if (text.isEmpty() || isStructuredVisualRequest(text))
         return QString();
     const auto subject = [](const QString &value) {
         const QString cleaned = imageSubjectText(value);
@@ -267,6 +267,15 @@ QString imageRequestPrompt(const QString &input)
     if (lead.match(low).hasMatch())
         return subject(text);
     return QString();
+}
+
+bool isStructuredVisualRequest(const QString &text)
+{
+    static const QRegularExpression re(
+        QStringLiteral("\\b(?:flow\\s*charts?|diagrams?|mind\\s+maps?|uml|sequence\\s+diagrams?|"
+                       "org\\s+charts?|schematics?|network\\s+maps?)\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    return re.match(text).hasMatch();
 }
 
 namespace {

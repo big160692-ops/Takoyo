@@ -70,7 +70,7 @@ private:
     QStringList mentionedFilePaths(const QString &text) const;
     void followUpWithFiles(const QString &cid, const QList<util::FileRequest> &requests);
     void finishReply(const QString &cid, int index, const QString &full, bool cancelled);
-    void finishError(const QString &cid, int index, const QString &message);
+    void finishError(const QString &cid, int index, const QString &message, const QString &partial = QString());
     void startDirectImage(const QString &cid, const QString &prompt);
     void beginImage(const QString &prompt, const QString &cid, int index, bool direct);
     void finishImage(const QJsonObject &meta, const QJsonObject &context);

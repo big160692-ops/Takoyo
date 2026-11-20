@@ -8,11 +8,12 @@ import threading
 import tkinter as tk
 import webbrowser
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 
 from . import model_catalog, theme, visuals
 from .ai_providers import CancelToken
 from .local_ai import LocalAIError
+from .memory import ConversationStore
 from .model_catalog import DALLE_SIZES, IMAGE_PROVIDERS, IMAGE_SIZES, LOCAL_MODELS, local_model, local_model_by_name
 from .widgets import (
     Card,
@@ -403,21 +404,60 @@ class SettingsDialog(BaseDialog):
         )
 
         # -- api ----------------------------------------------------------- #
-        _section(content, "LOCAL API", "Use Takoyo from other apps", "An OpenAI-compatible endpoint on this computer. It has no login, so keep the host on 127.0.0.1.")
+        _section(content, "LOCAL API", "Use Takoyo from other apps", "Bearer-token protected API. Keep the host on 127.0.0.1 unless you need network access.")
         self.api_port = LabeledField(content, label="Port", value=str(app.config.get("api_port", 8765)), height=44)
         self.api_port.pack(fill="x", pady=(6, 8))
+        self.api_token = LabeledField(
+            content,
+            label="Bearer token",
+            value="",
+            placeholder="Saved token — type a replacement",
+            secret=True,
+            height=44,
+            hint="Use Copy token to add it to a client's Authorization: Bearer header.",
+        )
+        self.api_token.pack(fill="x", pady=(0, 8))
         api_row = tk.Frame(content, bg=_BG)
         api_row.pack(fill="x")
         self.api_status = tk.Label(api_row, text="", bg=_BG, fg=theme.MUTED, font=theme.font(10), anchor="w")
         self.api_status.pack(side="left")
         self.api_toggle_btn = TextButton(api_row, "Start API", command=self._toggle_api, variant="secondary", size=10, height=32)
         self.api_toggle_btn.pack(side="right")
+        TextButton(
+            api_row,
+            "Copy token",
+            command=self._copy_api_token,
+            variant="secondary",
+            size=10,
+            height=32,
+        ).pack(side="right", padx=(0, 8))
         self.api_url = tk.Label(
             content, text="", bg=_BG, fg=theme.BLUE, font=theme.font(9, "medium"), anchor="w", cursor="hand2"
         )
         self.api_url.pack(fill="x", pady=(6, 0))
         self.api_url.bind("<Button-1>", lambda e: self._copy_api())
         self._refresh_api()
+
+        # -- chat history -------------------------------------------------- #
+        _section(content, "CHAT HISTORY", "Back up your conversations", "Exports include messages and attachments metadata. Restoring keeps existing chats.")
+        history_row = tk.Frame(content, bg=_BG)
+        history_row.pack(fill="x", pady=(6, 0))
+        TextButton(
+            history_row,
+            "Export / back up chats",
+            command=self._export_history,
+            variant="secondary",
+            size=10,
+            height=32,
+        ).pack(side="left")
+        TextButton(
+            history_row,
+            "Restore chats",
+            command=self._restore_history,
+            variant="secondary",
+            size=10,
+            height=32,
+        ).pack(side="left", padx=(8, 0))
 
         # -- about --------------------------------------------------------- #
         tk.Frame(content, bg=theme.LINE_SOFT, height=1).pack(fill="x", pady=(18, 10))
@@ -445,6 +485,54 @@ class SettingsDialog(BaseDialog):
                 parts["check"].configure(image="")
         self._build_connection()
         self._refresh_builtin()
+
+    def _export_history(self):
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Export conversation backup",
+            defaultextension=".json",
+            filetypes=[("Takoyo conversation backup", "*.json")],
+        )
+        if not path:
+            return
+        try:
+            count = self.app.conversations.export_to(path)
+        except OSError as exc:
+            messagebox.showerror("Export failed", str(exc), parent=self)
+            return
+        messagebox.showinfo("Chats exported", f"Exported {count} conversation(s).", parent=self)
+
+    def _restore_history(self):
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="Restore conversation backup",
+            filetypes=[("Takoyo conversation backup", "*.json")],
+        )
+        if not path:
+            return
+        try:
+            count = self.app.conversations.restore_from(path)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Restore failed", str(exc), parent=self)
+            return
+        if count <= 0:
+            messagebox.showwarning("Restore failed", "The backup contained no restorable conversations.", parent=self)
+            return
+        self.app.refresh_sidebar()
+        messagebox.showinfo(
+            "Chats restored",
+            f"Restored {count} conversation(s). Existing chats were kept.",
+            parent=self,
+        )
+
+    def _copy_api_token(self):
+        token = str(self.app.config.get("api_token", "") or "")
+        if not token:
+            self.app.toast("No API token is configured", "close")
+            return
+        self.clipboard_clear()
+        self.clipboard_append(token)
+        self.app.toast("Bearer token copied", "copy")
 
     def _build_connection(self):
         for child in self.conn_box.winfo_children():
@@ -683,6 +771,9 @@ class SettingsDialog(BaseDialog):
             self.app.toast("The API port must be between 1024 and 65535", "close")
             return False
         values["api_port"] = port
+        api_token = self.api_token.get().strip()
+        if api_token:
+            values["api_token"] = api_token
         self.app.config.update(values)
         self.app.on_settings_saved()
         if not silent:

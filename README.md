@@ -5,7 +5,9 @@ The window is a native **C++/Qt 6** app; the AI engine, projects, image painter,
 and local API stay in Python. Everything ships as one `Takoyo.exe` and is drawn
 in a quiet white-and-ink style with the Takoyo octopus mascot.
 
-**Release 2.1.3** — the interface is native C++/Qt with smoother animation,
+**Release 2.1.4** — authenticated Local API access, project-contained file
+operations, chat backup and corruption recovery, accessible keyboard controls,
+and safer streaming and diagram responses. The interface is native C++/Qt with smoother animation,
 lower CPU use, and a bundled Qwen2.5 3B model for the built-in AI. `Takoyo.exe`
 is a single file that unpacks its runtime to
 `%LOCALAPPDATA%\Takoyo\app-<build>` and starts the Python engine beside it. If
@@ -54,10 +56,9 @@ To uninstall, delete `Takoyo.exe` and the two folders above. Deleting
 - **Reads your screenshots online or off** — attach an image and the built-in
   model reads its text with Windows OCR, while cloud vision models can see the
   picture itself.
-- **Reads the files you name** — drop a path into a message (`C:/notes/todo.md`,
-  `src/main.py`, or a path with spaces) and Takoyo opens it before answering,
-  inside or outside the project. The model can also request more files by path
-  while it works.
+- **Reads project and workspace files** — in a project chat, Takoyo can read
+  files only inside that project. Without an open project, file reads are
+  limited to `~/.takoyo/workspace`; arbitrary machine paths are not read.
 - **Project editing** — open a real folder as a project and ask Takoyo to
   scaffold, refactor, or fix it. Suggested files appear as inline cards with
   **Apply**, or apply automatically if you enable it.
@@ -65,8 +66,8 @@ To uninstall, delete `Takoyo.exe` and the two folders above. Deleting
   project without leaving the app.
 - **Cloud models when you want them** — OpenAI, Anthropic, Google Gemini, and
   Ollama, with a connection test.
-- **Local API** — token-free OpenAI-compatible HTTP API for chat, images, files,
-  and code execution.
+- **Local API** — bearer-token-protected OpenAI-compatible HTTP API for chat,
+  images, files, and code execution.
 - **Subtle motion** — the mascot floats, the sidebar and art panel glide, and
   thinking, status, and toast feedback animate.
 
@@ -192,10 +193,10 @@ Then click **Test connection** to verify.
   text out of the image on this PC using the OCR engine built into Windows, so
   no key is needed. With OpenAI, Anthropic or Google selected, the image itself
   is sent to that model.
-- **Read any file** — mention its path in the message ("summarise
-  `C:/Users/me/notes.txt`") or attach it, and Takoyo reads it before replying.
-  If the model needs another file, it asks for it by path and Takoyo sends the
-  contents back. Large files are trimmed to fit the model's context.
+- **Read workspace files** — mention a project-relative path, or a path inside
+  `~/.takoyo/workspace` when no project is open. Takoyo does not read arbitrary
+  files elsewhere on the machine. Large files are trimmed to fit the model's
+  context.
 
 ## Build Takoyo.exe
 
@@ -272,8 +273,11 @@ python main.py --api --host 0.0.0.0  # expose on the network (see warning)
 ```
 
 Defaults: `http://127.0.0.1:8765`. You can also start/stop it from
-**Settings → Local API**. The `api_host`, `api_port`, and `api_auto_start`
-values live in `~/.takoyo/config.json`.
+**Settings → Local API**. A random bearer token is generated and saved in
+`~/.takoyo/config.json`; copy it from Settings when connecting a client. The
+host, port, token, and allowed browser origins live in that file. Browser
+origins are denied unless an exact origin is added to `api_allowed_origins`;
+wildcard origins are not accepted.
 
 ### Endpoints
 
@@ -301,37 +305,48 @@ values live in `~/.takoyo/config.json`.
 ### Examples
 
 ```bash
+# Copy the bearer token from Settings → Local API.
+export TAKOYO_API_TOKEN="paste-your-token-here"
+
 # Chat
 curl -X POST http://127.0.0.1:8765/chat \
+  -H "Authorization: Bearer $TAKOYO_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"message": "Explain recursion in one sentence"}'
 
 # Chat with memory: reuse conversation_id across calls
 curl -X POST http://127.0.0.1:8765/chat \
+  -H "Authorization: Bearer $TAKOYO_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"message": "And give an example", "conversation_id": "demo"}'
 
 # OpenAI-compatible (works with any OpenAI SDK pointed at this base URL)
 curl -X POST http://127.0.0.1:8765/v1/chat/completions \
+  -H "Authorization: Bearer $TAKOYO_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}'
 
 # Image
 curl -X POST http://127.0.0.1:8765/v1/images/generations \
+  -H "Authorization: Bearer $TAKOYO_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"prompt": "a friendly purple octopus", "n": 1}'
 
 # Code and files
 curl -X POST http://127.0.0.1:8765/run \
+  -H "Authorization: Bearer $TAKOYO_API_TOKEN" \
   -H "Content-Type: application/json" -d '{"code": "print(2 + 2)"}'
 curl -X POST http://127.0.0.1:8765/files/write \
+  -H "Authorization: Bearer $TAKOYO_API_TOKEN" \
   -H "Content-Type: application/json" -d '{"path": "workspace/notes.txt", "content": "hello"}'
 
 # Built-in local AI (no key). Initial setup downloads the model first.
 curl -X POST http://127.0.0.1:8765/local/setup \
+  -H "Authorization: Bearer $TAKOYO_API_TOKEN" \
   -H "Content-Type: application/json" -d '{"model": "qwen2.5-1.5b"}'
-curl -s http://127.0.0.1:8765/local          # poll install/run status
+curl -s http://127.0.0.1:8765/local -H "Authorization: Bearer $TAKOYO_API_TOKEN" # poll install/run status
 curl -X POST http://127.0.0.1:8765/chat \
+  -H "Authorization: Bearer $TAKOYO_API_TOKEN" \
   -H "Content-Type: application/json" -d '{"provider": "local", "message": "hi"}'
 ```
 
@@ -340,18 +355,22 @@ overrides; `message` (single string) or `messages` (OpenAI-style list).
 Conversation history is only saved when you pass `conversation_id`, and only
 after a successful reply.
 
-File paths are relative to `~/.takoyo`. Reads can open anything under that
-folder; **writes and deletes are limited to `workspace/` and `projects/`**,
-and deleted paths are moved to `~/.takoyo/trash`.
+File paths are relative to `~/.takoyo`. Reads, writes, and deletes are limited
+to `workspace/` and `projects/`; deleted paths are moved to
+`~/.takoyo/trash`. `GET /files` lists the workspace by default.
+
+Use **Settings → Export / back up chats** to save a JSON backup, and
+**Restore chats** to import it. Existing conversations are kept; imported ID
+collisions receive new IDs. Invalid conversation files are moved to
+`~/.takoyo/trash/conversations/corrupt` and reported in the interface.
 
 ### ⚠ Security warning
 
-As requested, this API has **no authentication, no rate limits, and no quota**.
-Anyone who can reach the port can chat, run code, read files under `~/.takoyo`,
-and write or delete files inside `workspace/` and `projects/`. It binds to
-`127.0.0.1` by default for that reason — only use `--host 0.0.0.0` (or another
-interface) on a trusted network. Code execution still requires it to be
-enabled in Settings.
+All API requests require `Authorization: Bearer <token>`, including loopback.
+The token is randomly generated on first run and can be copied from Settings.
+The API has no rate limits or quota. Browser access is disabled unless the
+request's exact `Origin` is in `api_allowed_origins`. Only expose the API to
+networks you trust. Code execution still requires it to be enabled in Settings.
 
 ## Safety
 
@@ -362,10 +381,10 @@ enabled in Settings.
 - Code execution is sandboxed to a local `takoyo_workspace` folder in your home
   directory and only whitelisted commands (`python`, `pip`) are allowed. It can
   be disabled in **Settings → Permissions**.
-- The Local API's write and delete endpoints only accept paths inside
-  `workspace/` and `projects/`.
-- The Local API intentionally has no authentication (see the warning above).
-  Keep it on `127.0.0.1` unless you trust every device that can reach the port.
+- The Local API file endpoints only accept paths inside `workspace/` and
+  `projects/`.
+- The Local API requires a bearer token on every interface; browser origins are
+  allowlisted explicitly.
 - The local AI setup downloads the llama.cpp engine from its official GitHub
   releases and model weights from Hugging Face. Downloads are verified for
   completeness; after that, local chat makes no network calls.

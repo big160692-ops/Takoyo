@@ -42,6 +42,7 @@ class IconButton : public QAbstractButton {
 public:
     explicit IconButton(const QString &icon, int iconSize, QWidget *parent = nullptr);
 
+    void setToolTip(const QString &toolTip);
     void setIconName(const QString &icon);
     void setColor(const QColor &color);
     void setHoverColor(const QColor &color);

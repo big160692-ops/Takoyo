@@ -30,6 +30,7 @@ QString formatGeometry(const QWidget *window);
 void applyGeometry(QWidget *window, const QString &geometry);
 
 QString imageRequestPrompt(const QString &text);
+bool isStructuredVisualRequest(const QString &text);
 
 // Rough token accounting so long prompts and file contents can be fitted to the
 // model's context window instead of being cut at an arbitrary character count.

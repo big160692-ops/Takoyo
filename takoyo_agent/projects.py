@@ -104,6 +104,15 @@ class ProjectStore:
         for child in self.dir.iterdir():
             if not child.is_dir() or not _ID_RE.match(child.name):
                 continue
+            try:
+                if child.is_symlink():
+                    continue
+                resolved = child.resolve()
+                projects_root = self.dir.resolve()
+            except (OSError, RuntimeError):
+                continue
+            if resolved == projects_root or projects_root not in resolved.parents:
+                continue
             meta = self._read_meta(child.name)
             if not meta:
                 meta = {"id": child.name, "name": child.name, "created": child.stat().st_mtime, "updated": child.stat().st_mtime}
@@ -121,7 +130,14 @@ class ProjectStore:
             root = self.root(pid)
         except ValueError:
             return None
-        if not root.is_dir():
+        try:
+            projects_root = self.dir.resolve()
+            if root.is_symlink():
+                return None
+            root = root.resolve()
+        except (OSError, RuntimeError):
+            return None
+        if not root.is_dir() or root == projects_root or projects_root not in root.parents:
             return None
         meta = self._read_meta(pid)
         return meta or {"id": pid, "name": pid, "created": root.stat().st_mtime, "updated": root.stat().st_mtime}
@@ -172,8 +188,17 @@ class ProjectStore:
         rel = (rel or "").replace("\\", "/").strip()
         if rel.startswith("/") or re.match(r"^[A-Za-z]:", rel):
             raise ValueError("Use a path relative to the project")
-        root = self.root(pid).resolve()
-        target = (root / rel).resolve()
+        try:
+            projects_root = self.dir.resolve()
+            project_path = self.root(pid)
+            if project_path.is_symlink():
+                raise ValueError("Project folder cannot be a symbolic link")
+            root = project_path.resolve()
+            target = (project_path / rel).resolve()
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(f"Could not resolve project path: {exc}") from exc
+        if root == projects_root or projects_root not in root.parents:
+            raise ValueError("Project folder escapes Takoyo's projects directory")
         if target != root and root not in target.parents:
             raise ValueError("Path escapes the project")
         if target.name == META_NAME:
@@ -181,9 +206,9 @@ class ProjectStore:
         return target
 
     def files(self, pid: str, max_files: int = 800) -> list[dict]:
-        root = self.root(pid)
-        if not root.is_dir():
+        if not self.get(pid):
             return []
+        root = self.root(pid).resolve()
         out: list[dict] = []
         for path in root.rglob("*"):
             if len(out) >= max_files:

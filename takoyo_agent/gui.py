@@ -39,6 +39,28 @@ TOOL_RE = re.compile(r"<takoyo-tool>\s*(\{.*?\})\s*</takoyo-tool>", re.S | re.I)
 IMAGE_TAG_RE = re.compile(r"<takoyo-image>(.*?)</takoyo-image>", re.S | re.I)
 FENCE_RE = re.compile(r"```([^\n`]*)\n(.*?)```", re.S)
 IMAGE_COMMAND_RE = re.compile(r"^\s*/(?:image|img|art|draw|paint)\b[:,]?\s*", re.I)
+STRUCTURED_VISUAL_RE = re.compile(
+    r"\b(?:flow\s*charts?|diagrams?|mind\s+maps?|uml|sequence\s+diagrams?|"
+    r"org\s+charts?|schematics?|network\s+maps?)\b",
+    re.I,
+)
+
+
+def is_structured_visual_request(text: str) -> bool:
+    return bool(STRUCTURED_VISUAL_RE.search(text or ""))
+
+
+def structured_visual_fallback(user_prompt: str, image_prompts: list[str]) -> str:
+    if image_prompts and is_structured_visual_request(user_prompt):
+        return (
+            "Takoyo Art cannot produce a structured, labeled diagram. "
+            "No image was generated; I can provide the diagram as Mermaid code instead."
+        )
+    return ""
+
+
+def _stream_failure_event(cid, index, message, error_kind, parts):
+    return ("error", cid, index, message, error_kind, "".join(parts))
 
 
 # --------------------------------------------------------------------------- #
@@ -1696,6 +1718,12 @@ class TakoyoApp:
             self.sidebar.refresh()
         except Exception:
             pass
+        errors = self.conversations.take_recovery_errors()
+        if errors:
+            self.toast(
+                f"{len(errors)} damaged chat file(s) moved to Takoyo trash for recovery",
+                "close",
+            )
 
     def _sync_busy(self):
         busy = self.streaming or self._image_jobs > 0
@@ -2066,7 +2094,7 @@ class TakoyoApp:
         self.refresh_sidebar()
 
         prompt = image_request_prompt(text)
-        if prompt:
+        if prompt and not is_structured_visual_request(text):
             self._start_direct_image(cid, prompt, display)
             return
 
@@ -2116,14 +2144,14 @@ class TakoyoApp:
             cancelled = bool(token is not None and token.is_set())
             self.queue.put(("done", cid, index, "".join(parts), cancelled))
         except LocalAINotReady as exc:
-            self.queue.put(("error", cid, index, str(exc), "local"))
+            self.queue.put(_stream_failure_event(cid, index, str(exc), "local", parts))
         except (LocalAIError,) as exc:
-            self.queue.put(("error", cid, index, str(exc), "local"))
+            self.queue.put(_stream_failure_event(cid, index, str(exc), "local", parts))
         except ai_providers.ProviderError as exc:
-            self.queue.put(("error", cid, index, str(exc), "provider"))
+            self.queue.put(_stream_failure_event(cid, index, str(exc), "provider", parts))
         except Exception as exc:
             traceback.print_exc()
-            self.queue.put(("error", cid, index, f"{type(exc).__name__}: {exc}", "error"))
+            self.queue.put(_stream_failure_event(cid, index, f"{type(exc).__name__}: {exc}", "error", parts))
 
     def stop_streaming(self):
         if self.streaming and self.cancel_token is not None:
@@ -2163,8 +2191,8 @@ class TakoyoApp:
             self._finish_reply(cid, index, full, cancelled)
             return
         if kind == "error":
-            _, cid, index, message, error_kind = item
-            self._finish_error(cid, index, message, error_kind)
+            _, cid, index, message, error_kind, partial = item
+            self._finish_error(cid, index, message, error_kind, partial)
             return
         if kind == "image_ready":
             _, meta, cid, index, prompt, direct = item
@@ -2218,6 +2246,15 @@ class TakoyoApp:
             self._sync_busy()
             return
         cleaned, proposals, prompts = parse_reply(full)
+        user_prompt = next(
+            (m.get("content", "") for m in reversed(conv["messages"][:index])
+             if m.get("role") == "user" and not m.get("hidden")),
+            "",
+        )
+        fallback = structured_visual_fallback(user_prompt, prompts)
+        if fallback:
+            prompts = []
+            cleaned = fallback
         if not cleaned.strip():
             if prompts:
                 cleaned = f"Made you an image of **{prompts[0]}**."
@@ -2248,10 +2285,12 @@ class TakoyoApp:
         self._sync_busy()
         self.refresh_sidebar()
 
-    def _finish_error(self, cid: str, index: int, message: str, error_kind: str):
+    def _finish_error(self, cid: str, index: int, message: str, error_kind: str, partial: str = ""):
         conv = self.conversations.get(cid)
         if conv and 0 <= index < len(conv["messages"]):
-            conv = self.conversations.update_message(cid, index, content="", error=message, error_kind=error_kind)
+            conv = self.conversations.update_message(
+                cid, index, content=partial, error=message, error_kind=error_kind
+            )
             if self.current_conversation and self.current_conversation.get("id") == cid:
                 self.current_conversation = conv
                 self.chat.refresh(conv)

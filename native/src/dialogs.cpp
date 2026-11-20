@@ -8,8 +8,12 @@
 #include "widgets.h"
 
 #include <QAbstractItemView>
+#include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
+#include <QDir>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -21,6 +25,7 @@
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QJsonArray>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QVBoxLayout>
@@ -449,6 +454,36 @@ SettingsDialog::SettingsDialog(Config *config, QWidget *parent)
     apiPort_->setValue(config_->integer(QStringLiteral("api_port")));
     form->addRow(textLabel(QStringLiteral("Local API port"), 10, QStringLiteral("medium"), theme::INK_SOFT, this),
                  apiPort_);
+    apiHost_ = new QLineEdit(config_->str(QStringLiteral("api_host")), this);
+    apiHost_->setPlaceholderText(QStringLiteral("127.0.0.1"));
+    form->addRow(textLabel(QStringLiteral("Local API host"), 10, QStringLiteral("medium"), theme::INK_SOFT, this),
+                 apiHost_);
+    apiToken_ = new QLineEdit(this);
+    apiToken_->setEchoMode(QLineEdit::Password);
+    apiToken_->setPlaceholderText(QStringLiteral("Saved token — type a replacement"));
+    auto *tokenRow = new QWidget(this);
+    auto *tokenLayout = new QHBoxLayout(tokenRow);
+    tokenLayout->setContentsMargins(0, 0, 0, 0);
+    tokenLayout->setSpacing(8);
+    tokenLayout->addWidget(apiToken_, 1);
+    auto *copyToken = new TextButton(QStringLiteral("Copy"), TextButton::Variant::Secondary, 34, tokenRow);
+    copyToken->setFontSize(9);
+    tokenLayout->addWidget(copyToken);
+    connect(copyToken, &QAbstractButton::clicked, this, [this]() {
+        QApplication::clipboard()->setText(config_->str(QStringLiteral("api_token")));
+        QMessageBox::information(this, QStringLiteral("API token copied"),
+                                 QStringLiteral("The bearer token is on the clipboard. Keep it private."));
+    });
+    form->addRow(textLabel(QStringLiteral("Local API bearer token"), 10, QStringLiteral("medium"), theme::INK_SOFT, this),
+                 tokenRow);
+    QStringList origins;
+    for (const QJsonValue &origin : config_->value(QStringLiteral("api_allowed_origins")).toArray())
+        if (origin.isString())
+            origins << origin.toString();
+    apiOrigins_ = new QLineEdit(origins.join(QStringLiteral(", ")), this);
+    apiOrigins_->setPlaceholderText(QStringLiteral("Leave blank to deny browser origins"));
+    form->addRow(textLabel(QStringLiteral("Allowed browser origins"), 10, QStringLiteral("medium"), theme::INK_SOFT, this),
+                 apiOrigins_);
 
     outer->addLayout(form);
 
@@ -456,10 +491,50 @@ SettingsDialog::SettingsDialog(Config *config, QWidget *parent)
     autoApply_->setChecked(config_->flag(QStringLiteral("auto_apply_edits")));
     outer->addWidget(autoApply_);
 
-    auto *note = textLabel(QStringLiteral("Changes apply to your next message. A new local API port takes effect the next time Takoyo starts."),
+    auto *note = textLabel(QStringLiteral("Changes apply to your next message. A new Local API host or port takes effect the next time Takoyo starts. Network hosts require a bearer token; browser access is denied unless its exact origin is listed."),
                            9, QStringLiteral("regular"), theme::FAINT, this);
     note->setWordWrap(true);
     outer->addWidget(note);
+    auto *historyActions = new QHBoxLayout();
+    auto *exportHistory = new TextButton(QStringLiteral("Export / back up chats"), TextButton::Variant::Secondary, 32, this);
+    auto *restoreHistory = new TextButton(QStringLiteral("Restore chats"), TextButton::Variant::Secondary, 32, this);
+    exportHistory->setFontSize(9);
+    restoreHistory->setFontSize(9);
+    historyActions->addWidget(exportHistory);
+    historyActions->addWidget(restoreHistory);
+    historyActions->addStretch(1);
+    outer->addLayout(historyActions);
+    connect(exportHistory, &QAbstractButton::clicked, this, [this]() {
+        const QString path = QFileDialog::getSaveFileName(
+            this, QStringLiteral("Export conversation backup"),
+            QDir::home().filePath(QStringLiteral("takoyo-conversations.json")),
+            QStringLiteral("Takoyo conversation backup (*.json)"));
+        if (path.isEmpty())
+            return;
+        ConversationStore store(util::conversationsDir());
+        QString error;
+        if (!store.exportAll(path, &error))
+            QMessageBox::warning(this, QStringLiteral("Export failed"), error);
+        else
+            QMessageBox::information(this, QStringLiteral("Chats exported"),
+                                     QStringLiteral("Your conversations were exported to the selected file."));
+    });
+    connect(restoreHistory, &QAbstractButton::clicked, this, [this]() {
+        const QString path = QFileDialog::getOpenFileName(
+            this, QStringLiteral("Restore conversation backup"), QDir::homePath(),
+            QStringLiteral("Takoyo conversation backup (*.json)"));
+        if (path.isEmpty())
+            return;
+        ConversationStore store(util::conversationsDir());
+        QString error;
+        const int count = store.restoreFrom(path, &error);
+        if (count <= 0)
+            QMessageBox::warning(this, QStringLiteral("Restore failed"), error);
+        else
+            QMessageBox::information(this, QStringLiteral("Chats restored"),
+                                     QStringLiteral("Restored %1 conversation(s). Existing chats were kept.")
+                                         .arg(count));
+    });
     outer->addStretch(1);
 
     auto *buttons = new QHBoxLayout();
@@ -537,6 +612,18 @@ void SettingsDialog::save()
     config_->set(QStringLiteral("image_size"), imageSize_->currentText(), false);
     config_->set(QStringLiteral("auto_apply_edits"), autoApply_->isChecked(), false);
     config_->set(QStringLiteral("api_port"), apiPort_->value(), false);
+    const QString apiHost = apiHost_->text().trimmed();
+    config_->set(QStringLiteral("api_host"), apiHost.isEmpty() ? QStringLiteral("127.0.0.1") : apiHost, false);
+    const QString typedToken = apiToken_->text().trimmed();
+    if (!typedToken.isEmpty())
+        config_->set(QStringLiteral("api_token"), typedToken, false);
+    QJsonArray allowedOrigins;
+    for (const QString &origin : apiOrigins_->text().split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+        const QString value = origin.trimmed();
+        if (!value.isEmpty() && !allowedOrigins.contains(value))
+            allowedOrigins.append(value);
+    }
+    config_->set(QStringLiteral("api_allowed_origins"), allowedOrigins, false);
     config_->save();
     accept();
 }

@@ -10,6 +10,7 @@
 
 class Config;
 class QNetworkAccessManager;
+class QNetworkRequest;
 class QNetworkReply;
 class QProcess;
 class QTimer;
@@ -20,30 +21,34 @@ public:
     using Endpoint = std::function<QUrl()>;
     using Recover = std::function<bool()>;
     ChatStream(QNetworkAccessManager *network, Endpoint endpoint, const QJsonObject &payload,
-               Recover recover = {}, QObject *parent = nullptr);
+               const QString &token, Recover recover = {}, QObject *parent = nullptr);
     void cancel();
 
 signals:
     void chunk(const QString &text);
     void finished(const QString &fullText, bool cancelled);
-    void failed(const QString &message);
+    void failed(const QString &message, const QString &partial);
 
 private:
     void send();
     void retry();
     void onReadyRead();
     void onFinished();
+    void processEvent(const QByteArray &event);
 
     QNetworkAccessManager *network_ = nullptr;
+    QString token_;
     Endpoint endpoint_;
     QJsonObject payload_;
     Recover recover_;
     QNetworkReply *reply_ = nullptr;
     QByteArray buffer_;
     QString full_;
+    QString streamError_;
     int retries_ = 0;
     bool cancelled_ = false;
     bool done_ = false;
+    bool receivedDone_ = false;
 };
 
 class Backend : public QObject {
@@ -73,6 +78,7 @@ signals:
     void status(const QJsonObject &health);
 
 private:
+    void authorize(QNetworkRequest &request) const;
     void probeHealth(int attempt);
     void onHealth(QNetworkReply *reply);
     bool launchSidecar();
@@ -89,6 +95,7 @@ private:
 
     Config *config_ = nullptr;
     QNetworkAccessManager *network_ = nullptr;
+    QString apiToken_;
     QProcess *process_ = nullptr;
     QTimer *probeTimer_ = nullptr;
     QString baseUrl_;
