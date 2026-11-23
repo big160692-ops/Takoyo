@@ -1,0 +1,22 @@
+{
+  "name": "Nord",
+  "WHITE": "#2E3440",
+  "INK": "#ECEFF4",
+  "INK_SOFT": "#D8DEE9",
+  "MUTED": "#4C566A",
+  "FAINT": "#3B4252",
+  "LINE": "#4C566A",
+  "LINE_SOFT": "#3B4252",
+  "BORDER": "#4C566A",
+  "HOVER": "#3B4252",
+  "ACTIVE": "#434C5E",
+  "SEARCH_BG": "#3B4252",
+  "CHIP": "#3B4252",
+  "DANGER": "#BF616A",
+  "SUCCESS": "#A3BE8C",
+  "CODE_RED": "#BF616A",
+  "CODE_GREEN": "#A3BE8C",
+  "CODE_BLUE": "#88C0D0",
+  "ERROR_BG": "#3B2A2A",
+  "ERROR_LINE": "#BF616A"
+}

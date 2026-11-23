@@ -7,8 +7,10 @@
 #include "util.h"
 #include "widgets.h"
 
+#include <QAbstractButton>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QFontMetrics>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
@@ -19,8 +21,8 @@
 namespace {
 constexpr int kInnerMax = 760;
 constexpr int kInnerMargin = 64;
-const QString kWideTagline = QStringLiteral("Want to build, generate, or just want a\nchat. Let me Know");
-const QString kNarrowTagline = QStringLiteral("Want to build, generate, or just want a chat. Let me Know");
+const QString kWideTagline = QStringLiteral("Want to build, generate, or just chat?\nLet me know.");
+const QString kNarrowTagline = QStringLiteral("Want to build, generate, or just chat? Let me know.");
 
 class FolderIcon : public QWidget {
 public:
@@ -33,6 +35,55 @@ protected:
         painter.setRenderHint(QPainter::Antialiasing, true);
         icons::paint(painter, QStringLiteral("folder"), rect(), theme::MUTED);
     }
+};
+
+// An outlined quick-action pill shown under the home tagline.
+class ActionChip : public QAbstractButton {
+public:
+    ActionChip(const QString &icon, const QString &label, QWidget *parent)
+        : QAbstractButton(parent)
+        , icon_(icon)
+        , label_(label)
+    {
+        setCursor(Qt::PointingHandCursor);
+        setFont(theme::font(13, QStringLiteral("medium")));
+        setToolTip(label);
+        setAccessibleName(label);
+        setFocusPolicy(Qt::StrongFocus);
+        setFixedHeight(40);
+        const int textWidth = QFontMetrics(font()).horizontalAdvance(label_);
+        setFixedWidth(textWidth + kIconSize + kGap + kPadX * 2);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QRectF box = QRectF(rect()).adjusted(0.7, 0.7, -0.7, -0.7);
+        painter.setPen(QPen(hasFocus() ? theme::INK : theme::BORDER, 1.2));
+        painter.setBrush(underMouse() ? theme::HOVER : theme::WHITE);
+        painter.drawRoundedRect(box, height() / 2.0, height() / 2.0);
+
+        const QFontMetrics metrics(font());
+        const int textWidth = metrics.horizontalAdvance(label_);
+        const int total = kIconSize + kGap + textWidth;
+        const int left = (width() - total) / 2;
+        icons::paint(painter, icon_,
+                     QRectF(left, (height() - kIconSize) / 2.0, kIconSize, kIconSize),
+                     theme::INK);
+        painter.setFont(font());
+        painter.setPen(theme::INK);
+        painter.drawText(QRect(left + kIconSize + kGap, 0, textWidth, height()),
+                         Qt::AlignVCenter, label_);
+    }
+
+private:
+    static constexpr int kIconSize = 16;
+    static constexpr int kGap = 8;
+    static constexpr int kPadX = 14;
+    QString icon_;
+    QString label_;
 };
 } // namespace
 
@@ -62,7 +113,7 @@ HomeView::HomeView(QWidget *parent)
     scopeLayout->addWidget(new FolderIcon(scope_));
     scopeLabel_ = new QLabel(scope_);
     scopeLabel_->setFont(theme::font(11, QStringLiteral("medium")));
-    scopeLabel_->setStyleSheet(QStringLiteral("color:#8B8B8F;background:transparent;"));
+    scopeLabel_->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::MUTED.name()));
     scopeLabel_->setCursor(Qt::PointingHandCursor);
     scopeLayout->addWidget(scopeLabel_);
     scopeLayout->addStretch(1);
@@ -78,12 +129,39 @@ HomeView::HomeView(QWidget *parent)
 
     tagline_ = new QLabel(kWideTagline, inner_);
     tagline_->setFont(theme::font(26));
-    tagline_->setStyleSheet(QStringLiteral("color:#0B0B0D;background:transparent;"));
+    tagline_->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::INK.name()));
     tagline_->setAlignment(Qt::AlignCenter);
     tagline_->setWordWrap(true);
     tagline_->setMargin(0);
     innerLayout->addWidget(tagline_);
-    innerLayout->addSpacing(24);
+    innerLayout->addSpacing(22);
+
+    auto *chipRow = new QHBoxLayout();
+    chipRow->setContentsMargins(0, 0, 0, 0);
+    chipRow->setSpacing(10);
+    chipRow->addStretch(1);
+    const struct {
+        const char *icon;
+        const char *label;
+        const char *prompt;
+    } kActions[] = {
+        {"code", "Write code", "Write code for: "},
+        {"image", "Generate image", "Generate an image of "},
+        {"file", "Summarize a file", "Summarize this file: "},
+        {"brain", "Brainstorm", "Brainstorm ideas for "},
+    };
+    for (const auto &action : kActions) {
+        auto *chip = new ActionChip(QString::fromLatin1(action.icon),
+                                    QString::fromLatin1(action.label), inner_);
+        const QString prompt = QString::fromLatin1(action.prompt);
+        connect(chip, &QAbstractButton::clicked, this, [this, prompt]() {
+            composer_->setText(prompt);
+        });
+        chipRow->addWidget(chip);
+    }
+    chipRow->addStretch(1);
+    innerLayout->addLayout(chipRow);
+    innerLayout->addSpacing(22);
 
     composer_ = new Composer(inner_);
     innerLayout->addWidget(composer_);
@@ -100,6 +178,14 @@ HomeView::HomeView(QWidget *parent)
     floatTimer_.setTimerType(Qt::PreciseTimer);
     connect(&floatTimer_, &QTimer::timeout, this, &HomeView::updateFloat);
     layoutInner();
+}
+
+void HomeView::applyTheme()
+{
+    scopeLabel_->setStyleSheet(
+        QStringLiteral("color:%1;background:transparent;").arg(theme::MUTED.name()));
+    tagline_->setStyleSheet(
+        QStringLiteral("color:%1;background:transparent;").arg(theme::INK.name()));
 }
 
 void HomeView::setProject(const ProjectSummary *project)

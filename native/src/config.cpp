@@ -25,6 +25,7 @@ QJsonObject defaults()
     o.insert(QStringLiteral("max_tokens"), 2048);
     o.insert(QStringLiteral("image_provider"), QStringLiteral("takoyo"));
     o.insert(QStringLiteral("image_size"), QStringLiteral("1024x1280"));
+    o.insert(QStringLiteral("palette"), QStringLiteral("dark"));
     o.insert(QStringLiteral("allow_code_execution"), true);
     o.insert(QStringLiteral("auto_apply_edits"), false);
     o.insert(QStringLiteral("api_host"), QStringLiteral("127.0.0.1"));
@@ -37,6 +38,7 @@ QJsonObject defaults()
     o.insert(QStringLiteral("window_geometry"), QStringLiteral("1280x800"));
     o.insert(QStringLiteral("last_conversation"), QString());
     o.insert(QStringLiteral("last_project"), QString());
+    o.insert(QStringLiteral("working_folder"), QString());
     o.insert(QStringLiteral("voice_enabled"), true);
     return o;
 }

@@ -17,6 +17,7 @@
 #include <QCloseEvent>
 #include <QDate>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -27,7 +28,10 @@
 #include <QLabel>
 #include <QLocale>
 #include <QMenu>
+#include <QDesktopServices>
 #include <QMessageBox>
+#include <QProcess>
+#include <QUrl>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -145,7 +149,29 @@ const QString kProjectTools = QStringLiteral(
     "  ```python file=src/main.py\n"
     "  ...code...\n"
     "  ```\n"
-    "  Takoyo will offer that block as an editable file too.");
+    "  Takoyo will offer that block as an editable file too.\n"
+    "IMPORTANT: Whenever the user asks you to build, create, make, write, or generate a file or program, "
+    "you MUST emit a write_file block with the complete code. Never reply with only a fenced code block "
+    "and instructions telling the user to save it themselves. Always emit write_file so Takoyo can create "
+    "the file (an Apply button confirms).\n"
+"When you need to search the project for a file name or some text, emit:\n"
+"<takoyo-tool>\n"
+"{\"tool\": \"search\", \"query\": \"text or filename\", \"mode\": \"content\"}\n"
+"</takoyo-tool>\n"
+"Use \"mode\": \"filename\" to match file names only. Results come back to you.\n"
+"When you need a surgical edit instead of a full rewrite, emit:\n"
+"<takoyo-tool>\n"
+"{\"tool\": \"edit_file\", \"path\": \"relative/path.ext\", \"old\": \"exact text to replace\", \"new\": \"replacement text\"}\n"
+"</takoyo-tool>\n"
+"When the user asks to browse or open a link, emit:\n"
+"<takoyo-tool>\n"
+"{\"tool\": \"open_url\", \"url\": \"https://example.com\"}\n"
+"</takoyo-tool>\n"
+"When the user asks to open an app, emit:\n"
+"<takoyo-tool>\n"
+"{\"tool\": \"open_app\", \"app\": \"notepad\"}\n"
+"</takoyo-tool>\n"
+"open_url and open_app are confirmed with the user before they run.");
 
 const QString kNoProjectPrompt = QStringLiteral(
     "No project is open. If the user wants to build or edit a project, suggest starting one "
@@ -158,7 +184,16 @@ const QString kNoProjectPrompt = QStringLiteral(
     "</takoyo-tool>\n"
     "Takoyo fetches the file and sends it to you right away. Use {\"tool\": \"list_dir\", \"path\": "
     "\"folder\"} to list a folder. For general questions about facts, words, definitions, history, "
-    "science or code, answer from what you know and do not fetch or search for anything.");
+    "science or code, answer from what you know and do not fetch or search for anything.\n"
+    "You can also create or edit files: emit a write_file or edit_file block with an absolute path "
+    "(e.g. C:/Users/you/Downloads/Sorter.java) or a path relative to your home folder. Takoyo shows "
+    "an Apply button so the user confirms before anything is written.\n"
+    "IMPORTANT: Whenever the user asks you to build, create, make, write, or generate a file or program, "
+    "you MUST emit a write_file block with the complete code. Never reply with only a fenced code block "
+    "and instructions telling the user to save it themselves. Always emit write_file so Takoyo can create "
+    "the file (an Apply button confirms).\n"
+"You may still open links or apps on request with {\"tool\": \"open_url\", \"url\": \"...\"} or "
+"{\"tool\": \"open_app\", \"app\": \"...\"}.");
 
 const QString kImageTools = QStringLiteral(
     "If the user asks you to visualise something, prefer the <takoyo-image> tool above over describing it, "
@@ -227,9 +262,24 @@ QString attachmentNote(const QString &name, const QString &content)
 }
 
 QString systemPrompt(const ProjectStore &projects, bool hasProject, const ProjectSummary &project,
-                     const QString &prompt, int snapshotChars)
+                      const QString &prompt, int snapshotChars, const QString &workingFolder = QString(),
+                      bool compact = false)
 {
     QStringList parts;
+    if (compact) {
+        parts << QStringLiteral("You are Takoyo, a helpful AI assistant inside the Takoyo desktop app.");
+        parts << QStringLiteral("When asked to build, create, or write a file or program, output the complete code "
+                                "in a fenced code block AND emit a write_file tool block with the full code so "
+                                "Takoyo can create the file. Never refuse to write code. Never tell the user to "
+                                "save it themselves.");
+        if (hasProject)
+            parts << QStringLiteral("Current project: %1.").arg(project.name);
+        else if (!workingFolder.isEmpty())
+            parts << QStringLiteral("Working folder: %1. Create files there.").arg(workingFolder);
+        else
+            parts << QStringLiteral("Create files under the user's home folder.");
+        return parts.join(QStringLiteral("\n"));
+    }
     parts << kBasePrompt;
     const QString today = QLocale(QLocale::English).toString(QDate::currentDate(), QStringLiteral("MMMM d, yyyy"));
     parts << QStringLiteral("Today is %1.").arg(today);
@@ -240,6 +290,10 @@ QString systemPrompt(const ProjectStore &projects, bool hasProject, const Projec
                      .arg(project.name, project.id, context.isEmpty() ? QStringLiteral("(empty project)") : context);
     } else {
         parts << kNoProjectPrompt;
+        if (!workingFolder.isEmpty())
+            parts << QStringLiteral("The user picked a working folder: %1. Create and edit files there using "
+                                    "absolute paths under it.")
+                        .arg(workingFolder);
     }
     parts << kImageTools;
     parts << QStringLiteral("Answer now: if you know the answer, say it in this reply and do not "
@@ -388,10 +442,12 @@ QString localModelName(const QString &key)
 QString menuStyle()
 {
     return QStringLiteral(
-        "QMenu{background:#FFFFFF;border:1px solid #E7E7E9;border-radius:10px;padding:6px;}"
-        "QMenu::item{padding:7px 18px;border-radius:6px;color:#0B0B0D;}"
-        "QMenu::item:selected{background:#EDEDEF;color:#0B0B0D;}"
-        "QMenu::separator{height:1px;background:#E7E7E9;margin:5px 8px;}");
+        "QMenu{background:%1;border:1px solid %2;border-radius:10px;padding:6px;}"
+        "QMenu::item{padding:7px 18px;border-radius:6px;color:%3;}"
+        "QMenu::item:selected{background:%4;color:%3;}"
+        "QMenu::separator{height:1px;background:%2;margin:5px 8px;}")
+        .arg(theme::WHITE.name(), theme::LINE_SOFT.name(), theme::INK.name(),
+             theme::ACTIVE.name());
 }
 
 } // namespace
@@ -470,15 +526,17 @@ void MainWindow::buildUi()
     sidebarHost_ = new SlideHost(true, 396, sidebar_, this);
     root->addWidget(sidebarHost_);
 
-    auto *main = new QWidget(this);
-    main->setStyleSheet(QStringLiteral("background:#FFFFFF;"));
+    mainArea_ = new QWidget(this);
+    QWidget *const main = mainArea_;
+    main->setStyleSheet(QStringLiteral("background:%1;").arg(theme::WHITE.name()));
     auto *mainLayout = new QVBoxLayout(main);
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    auto *header = new QWidget(main);
+    header_ = new QWidget(main);
+    QWidget *const header = header_;
     header->setFixedHeight(66);
-    header->setStyleSheet(QStringLiteral("background:#FFFFFF;"));
+    header->setStyleSheet(QStringLiteral("background:%1;").arg(theme::WHITE.name()));
     auto *headerLayout = new QHBoxLayout(header);
     headerLayout->setContentsMargins(20, 10, 18, 10);
     headerLayout->setSpacing(0);
@@ -488,8 +546,8 @@ void MainWindow::buildUi()
     logoLayout->setContentsMargins(0, 0, 0, 0);
     logoLayout->setSpacing(9);
     auto *toggle = new IconButton(QStringLiteral("sidebar"), 25, logo_);
-    toggle->setColor(theme::INK);
-    toggle->setHoverColor(theme::INK);
+    toggle->setColor(&theme::INK);
+    toggle->setHoverColor(&theme::INK);
     toggle->setToolTip(QStringLiteral("Toggle sidebar"));
     connect(toggle, &QAbstractButton::clicked, this, &MainWindow::toggleSidebar);
     logoLayout->addWidget(toggle);
@@ -503,28 +561,29 @@ void MainWindow::buildUi()
     headerLayout->addStretch(1);
 
     auto *gear = new IconButton(QStringLiteral("gear"), 18, header);
-    gear->setColor(theme::MUTED);
-    gear->setHoverColor(theme::INK);
+    gear->setColor(&theme::MUTED);
+    gear->setHoverColor(&theme::INK);
     gear->setToolTip(QStringLiteral("Settings"));
     connect(gear, &QAbstractButton::clicked, this, &MainWindow::openSettings);
     headerLayout->addWidget(gear);
     headerLayout->addSpacing(8);
 
     artButton_ = new IconButton(QStringLiteral("image"), 18, header);
-    artButton_->setColor(theme::MUTED);
-    artButton_->setHoverColor(theme::INK);
+    artButton_->setColor(&theme::MUTED);
+    artButton_->setHoverColor(&theme::INK);
     artButton_->setToolTip(QStringLiteral("Art panel"));
     connect(artButton_, &QAbstractButton::clicked, this, &MainWindow::toggleArt);
     headerLayout->addWidget(artButton_);
 
-    auto *body = new QWidget(main);
-    body->setStyleSheet(QStringLiteral("background:#FFFFFF;"));
+    body_ = new QWidget(main);
+    QWidget *const body = body_;
+    body->setStyleSheet(QStringLiteral("background:%1;").arg(theme::WHITE.name()));
     auto *bodyLayout = new QHBoxLayout(body);
     bodyLayout->setContentsMargins(0, 0, 0, 0);
     bodyLayout->setSpacing(0);
 
     stack_ = new QStackedWidget(body);
-    stack_->setStyleSheet(QStringLiteral("QStackedWidget{background:#FFFFFF;}"));
+    stack_->setStyleSheet(QStringLiteral("QStackedWidget{background:%1;}").arg(theme::WHITE.name()));
     home_ = new HomeView(stack_);
     chat_ = new ChatView(stack_);
     stack_->addWidget(home_);
@@ -545,6 +604,31 @@ void MainWindow::wireSidebar()
     connect(sidebar_, &Sidebar::openProjectRequested, this, &MainWindow::openProject);
     connect(sidebar_, &Sidebar::openConversationRequested, this, &MainWindow::loadConversation);
     connect(sidebar_, &Sidebar::newProjectRequested, this, &MainWindow::newProjectDialog);
+    connect(sidebar_, &Sidebar::newChatRequested, this, &MainWindow::newChat);
+    connect(sidebar_, &Sidebar::paletteRequested, this, [this]() {
+        if (auto *existing = qobject_cast<PalettePickerDialog *>(paletteDialog_.data())) {
+            existing->raise();
+            existing->activateWindow();
+            return;
+        }
+        auto *dialog = new PalettePickerDialog(&config_, this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        const QString previousPalette = config_.str(QStringLiteral("palette"));
+        connect(dialog, &PalettePickerDialog::palettePreviewRequested, this, [this](const QString &id) {
+            if (theme::loadPalette(id))
+                applyTheme();
+        });
+        connect(dialog, &QDialog::rejected, this, [this, previousPalette]() {
+            theme::loadPalette(previousPalette);
+            applyTheme();
+        });
+        connect(dialog, &QDialog::accepted, this, [this]() {
+            updateStatus();
+            refreshSidebar();
+        });
+        paletteDialog_ = dialog;
+        dialog->show();
+    });
     connect(sidebar_, &Sidebar::projectMenuRequested, this, &MainWindow::showProjectMenu);
     connect(sidebar_, &Sidebar::conversationMenuRequested, this, &MainWindow::showConversationMenu);
     connect(sidebar_, &Sidebar::settingsRequested, this, &MainWindow::openSettings);
@@ -573,6 +657,14 @@ void MainWindow::wireComposers()
         connect(composer, &Composer::submitted, this, [this, composer]() { sendFromComposer(composer); });
         connect(composer, &Composer::stopRequested, this, &MainWindow::stopStreaming);
         connect(composer, &Composer::voiceRequested, this, &MainWindow::startVoice);
+        connect(composer, &Composer::folderChanged, this, [this](const QString &path) {
+            workingFolder_ = path;
+            config_.set(QStringLiteral("working_folder"), path, false);
+            config_.save();
+        });
+        const QString saved = config_.str(QStringLiteral("working_folder"));
+        composer->setFolder(saved);
+        workingFolder_ = saved;
     }
 }
 
@@ -708,6 +800,41 @@ void MainWindow::refreshSidebar()
 {
     sidebar_->refresh(sidebar_->query(), hasProject_ ? project_.id : QString(),
                       hasConversation_ ? conversation_.value(QStringLiteral("id")).toString() : QString());
+}
+
+void MainWindow::applyTheme()
+{
+    // Qt-level palette first (tooltips, combo popups, native scrollbars).
+    theme::applyAppPalette();
+
+    // Chrome that captured colours while the UI was built.
+    const QString ground = theme::WHITE.name();
+    mainArea_->setStyleSheet(QStringLiteral("background:%1;").arg(ground));
+    header_->setStyleSheet(QStringLiteral("background:%1;").arg(ground));
+    body_->setStyleSheet(QStringLiteral("background:%1;").arg(ground));
+    stack_->setStyleSheet(QStringLiteral("QStackedWidget{background:%1;}").arg(ground));
+
+    // Widgets with their own captured stylesheets / rebuildable content.
+    sidebar_->applyTheme();
+    refreshSidebar();
+    home_->applyTheme();
+    chat_->applyTheme();
+    art_->applyTheme();
+
+    // Status dot + label read their colour from config, not from applyTheme.
+    updateStatus();
+
+    // Re-render the open conversation so bubbles, code blocks and rich-text
+    // CSS follow the new palette. Skipped mid-stream to protect live output.
+    if (!streaming_ && !conversation_.isEmpty() && stack_->currentWidget() == chat_)
+        chat_->refresh(conversation_);
+
+    // Repaint everything: icon buttons, cards and custom paint events read
+    // the palette globals live.
+    const auto widgets = findChildren<QWidget *>();
+    for (QWidget *widget : widgets)
+        widget->update();
+    update();
 }
 
 void MainWindow::syncBusy()
@@ -954,7 +1081,7 @@ void MainWindow::sendFromComposer(Composer *composer)
             }
         }
         if (!seen)
-            mentioned.append(util::FileRequest{path, false});
+            mentioned.append(util::FileRequest{path, false, false, QString(), true});
     }
     if (!mentioned.isEmpty()) {
         const QString fileContext = readRequestedFiles(mentioned);
@@ -1026,7 +1153,7 @@ QJsonArray MainWindow::chatRequest(const QString &prompt, const QJsonObject &con
                                  : config_.str(QStringLiteral("provider"));
     const bool smallContext = provider == QLatin1String("local");
     const QString system = systemPrompt(projects_, hasProject_, project_, prompt,
-                                        smallContext ? 6000 : 22000);
+                                        smallContext ? 6000 : 22000, workingFolder_, smallContext);
     const QJsonArray history = convo.value(QStringLiteral("messages")).toArray();
     if (smallContext) {
         const int context = config_.integer(QStringLiteral("local_context"));
@@ -1073,7 +1200,7 @@ QString MainWindow::lastUserText(const QString &cid) const
 QString MainWindow::readRequestedFiles(const QList<util::FileRequest> &requests) const
 {
     const QString root = hasProject_ ? QDir(util::projectsDir()).filePath(project_.id)
-                                     : QDir(util::takoyoHome()).filePath(QStringLiteral("workspace"));
+                                     : QDir::homePath();
     QDir().mkpath(root);
     const QString canonicalRoot = QFileInfo(root).canonicalFilePath();
     const auto isWithinRoot = [&canonicalRoot](const QString &path) {
@@ -1125,6 +1252,54 @@ QString MainWindow::readRequestedFiles(const QList<util::FileRequest> &requests)
             budget -= listing.size() + 80;
             continue;
         }
+        if (request.searching) {
+            QString searchRoot = absolute;
+            if (!QFileInfo(absolute).isDir()) {
+                // A file path was given: search its parent folder.
+                searchRoot = QFileInfo(absolute).absolutePath();
+            }
+            if (!isWithinRoot(searchRoot))
+                searchRoot = root;
+            QStringList matches;
+            int count = 0;
+            QDirIterator it(searchRoot, QDir::Files, QDirIterator::Subdirectories);
+            while (it.hasNext() && count < 50) {
+                it.next();
+                const QFileInfo fi = it.fileInfo();
+                const QString rel = QDir(searchRoot).relativeFilePath(fi.absoluteFilePath());
+                bool hit = false;
+                QString snippet;
+                if (request.content) {
+                    QFile f(fi.absoluteFilePath());
+                    if (f.open(QIODevice::ReadOnly)) {
+                        const QByteArray data = f.read(64 * 1024);
+                        f.close();
+                        const QString text = QString::fromUtf8(data);
+                        if (!text.contains(QChar('\0')) && text.contains(request.query, Qt::CaseInsensitive)) {
+                            hit = true;
+                            const int idx = text.indexOf(request.query, 0, Qt::CaseInsensitive);
+                            const int start = qMax(0, idx - 60);
+                            snippet = text.mid(start, 180).replace(QChar('\n'), QChar(' ')).trimmed();
+                        }
+                    }
+                } else {
+                    if (fi.fileName().contains(request.query, Qt::CaseInsensitive)) {
+                        hit = true;
+                        snippet = QStringLiteral("(filename match)");
+                    }
+                }
+                if (hit) {
+                    matches << (snippet.isEmpty() ? rel : QStringLiteral("%1 — %2").arg(rel, snippet));
+                    ++count;
+                }
+            }
+            const QString result = matches.isEmpty()
+                ? QStringLiteral("[No matches for '%1' under %2]").arg(request.query, searchRoot)
+                : QStringLiteral("[Search results for '%1' under %2]\n%3").arg(request.query, searchRoot, matches.join(QChar('\n')));
+            chunks << result;
+            budget -= result.size();
+            continue;
+        }
         if (!info.isFile()) {
             chunks << QStringLiteral("[Takoyo could not open %1: no such file. "
                                      "Check the path and try again, or ask the user where it lives.]")
@@ -1166,7 +1341,7 @@ QString MainWindow::readRequestedFiles(const QList<util::FileRequest> &requests)
 QStringList MainWindow::mentionedFilePaths(const QString &text) const
 {
     QString root = hasProject_ ? QDir(util::projectsDir()).filePath(project_.id)
-                               : QDir(util::takoyoHome()).filePath(QStringLiteral("workspace"));
+                               : QDir::homePath();
     QDir().mkpath(root);
     const QString canonicalRoot = QFileInfo(root).canonicalFilePath();
     QStringList projectFiles;
@@ -1281,6 +1456,7 @@ void MainWindow::followUpWithFiles(const QString &cid, const QList<util::FileReq
 void MainWindow::finishReply(const QString &cid, int index, const QString &full, bool cancelled)
 {
     QJsonObject conv = conversations_.get(cid);
+    const QString pid = conv.value(QStringLiteral("project_id")).toString();
     const QJsonArray before = conv.value(QStringLiteral("messages")).toArray();
     if (conv.isEmpty() || index < 0 || index >= before.size()) {
         streaming_ = false;
@@ -1288,8 +1464,79 @@ void MainWindow::finishReply(const QString &cid, int index, const QString &full,
         return;
     }
 
-    const util::ParsedReply parsed = util::parseReply(full);
+    util::ParsedReply parsed = util::parseReply(full);
     QStringList imagePrompts = parsed.imagePrompts;
+
+    // If the model showed code in a fenced block but never emitted a write_file,
+    // try to recover a filename from the prose (e.g. "save it as NumberSorter.java")
+    // and turn the first code block into an Apply-able edit so Takoyo can create
+    // the file instead of leaving the user to copy/paste.
+    if (parsed.edits.isEmpty()) {
+        const QString userText = lastUserText(cid).toLower();
+        static const QRegularExpression intentRe(QStringLiteral("build|create|make|write|generate|file|code|program|app|sorter|sort"));
+        if (intentRe.match(userText).hasMatch()) {
+            static const QRegularExpression fileRe(
+                QStringLiteral("\\b([A-Za-z][\\w-]*\\.(?:java|py|js|ts|tsx|jsx|cpp|c|h|hpp|cs|go|rs|rb|php|html|css|txt|json|xml|md|sh|sql))\\b"));
+            const QRegularExpressionMatch fm = fileRe.match(full);
+            QString recoveredName;
+            if (fm.hasMatch())
+                recoveredName = fm.captured(1);
+            const auto segments = util::splitFences(full);
+            for (const util::Segment &seg : segments) {
+                if (!seg.code || seg.text.trimmed().isEmpty())
+                    continue;
+                if (recoveredName.isEmpty()) {
+                    const QString lang = seg.info.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts).value(0).toLower();
+                    const QString ext = lang.isEmpty() ? QStringLiteral("txt") : lang;
+                    recoveredName = QStringLiteral("code.") + ext;
+                }
+                util::ToolEdit te;
+                te.path = recoveredName;
+                te.content = seg.text;
+                // Auto-create the file so the user does not have to click Apply.
+                QString fullPath = recoveredName;
+                if (!QFileInfo(recoveredName).isAbsolute()) {
+                    const QString root = workingFolder_.isEmpty() ? QDir::homePath() : workingFolder_;
+                    QDir().mkpath(root);
+                    fullPath = QDir(root).filePath(recoveredName);
+                }
+                QDir().mkpath(QFileInfo(fullPath).absolutePath());
+                QFile af(fullPath);
+                if (af.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+                    af.write(te.content.toUtf8());
+                    af.close();
+                    te.applied = true;
+                    toast(QStringLiteral("Created %1").arg(recoveredName), QStringLiteral("check"));
+                }
+                parsed.edits.append(te);
+                break;
+            }
+        }
+    }
+    for (const util::EditRequest &er : parsed.editRequests) {
+        QString fullPath = er.path;
+        if (!QFileInfo(er.path).isAbsolute()) {
+            QString root;
+            if (!pid.isEmpty())
+                root = QDir(util::projectsDir()).filePath(pid);
+            else
+                root = QDir::homePath();
+            QDir().mkpath(root);
+            fullPath = QDir(root).filePath(er.path);
+        }
+        QFile file(fullPath);
+        QString original;
+        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            original = QString::fromUtf8(file.readAll());
+            file.close();
+        }
+        if (original.isEmpty() || !original.contains(er.oldText))
+            continue;
+        util::ToolEdit te;
+        te.path = er.path;
+        te.content = original.replace(er.oldText, er.newText);
+        parsed.edits.append(te);
+    }
     QString cleaned = parsed.cleaned;
     if (!imagePrompts.isEmpty() && util::isStructuredVisualRequest(lastUserText(cid))) {
         imagePrompts.clear();
@@ -1322,7 +1569,6 @@ void MainWindow::finishReply(const QString &cid, int index, const QString &full,
                   before.at(index).toObject().value(QStringLiteral("images")).toArray());
     conv = conversations_.updateMessage(cid, index, fields);
 
-    const QString pid = conv.value(QStringLiteral("project_id")).toString();
     if (!parsed.edits.isEmpty() && !pid.isEmpty() && config_.flag(QStringLiteral("auto_apply_edits"))) {
         QJsonArray applied;
         for (const util::ToolEdit &edit : parsed.edits) {
@@ -1443,6 +1689,49 @@ void MainWindow::finishReply(const QString &cid, int index, const QString &full,
         for (int i = 0; i < count; ++i)
             beginImage(imagePrompts.at(i), cid, index, false);
     }
+
+    // Terminal actions requested by the model: open a link in the browser or
+    // launch an app. Each is confirmed before it runs (AD-3).
+    for (const QString &url : parsed.openUrls) {
+        const QUrl qurl(url);
+        if (!qurl.isValid() || qurl.scheme().isEmpty()) {
+            toast(QStringLiteral("Invalid link: %1").arg(url), QStringLiteral("stop"));
+            continue;
+        }
+        const int answer = QMessageBox::question(
+            this, QStringLiteral("Open link"),
+            QStringLiteral("Open this link in your default browser?\n\n%1").arg(url),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer == QMessageBox::Yes) {
+            QDesktopServices::openUrl(qurl);
+            toast(QStringLiteral("Opened link"), QStringLiteral("external"));
+        } else {
+            toast(QStringLiteral("Cancelled"), QStringLiteral("stop"));
+        }
+    }
+    for (const QString &app : parsed.openApps) {
+        const int answer = QMessageBox::question(
+            this, QStringLiteral("Open app"),
+            QStringLiteral("Launch this application?\n\n%1").arg(app),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) {
+            toast(QStringLiteral("Cancelled"), QStringLiteral("stop"));
+            continue;
+        }
+        bool ok = false;
+        if (QFileInfo(app).isAbsolute() || app.contains(QDir::separator())) {
+            ok = QProcess::startDetached(app, QStringList());
+        } else {
+            ok = QProcess::startDetached(QStringLiteral("cmd"),
+                                        QStringList() << QStringLiteral("/c")
+                                                     << QStringLiteral("start")
+                                                     << QStringLiteral("")
+                                                     << app);
+        }
+        toast(ok ? QStringLiteral("Launched %1").arg(app) : QStringLiteral("Could not launch %1").arg(app),
+              ok ? QStringLiteral("check") : QStringLiteral("stop"));
+    }
+
     syncBusy();
     refreshSidebar();
 }
@@ -1649,7 +1938,54 @@ void MainWindow::applyProposal(const QString &path, const QString &content, int 
     if (pid.isEmpty() && hasProject_)
         pid = project_.id;
     if (pid.isEmpty()) {
-        toast(QStringLiteral("This chat isn't linked to a project"), QStringLiteral("folder"));
+        // No project: write directly to the requested location (absolute or
+        // under the user's home folder) after confirmation.
+        QString fullPath = path;
+        if (!QFileInfo(path).isAbsolute())
+            fullPath = QDir(QDir::homePath()).filePath(path);
+        const bool exists = QFileInfo(fullPath).exists();
+        QMessageBox box(QMessageBox::Question, QStringLiteral("Apply edit?"),
+                        exists ? QStringLiteral("Replace “%1”?").arg(path)
+                               : QStringLiteral("Create “%1”?").arg(path),
+                        QMessageBox::NoButton, this);
+        box.setInformativeText(QStringLiteral("Takoyo's version is a complete file, so the old contents are replaced."));
+        QPushButton *apply = box.addButton(QStringLiteral("Apply"), QMessageBox::AcceptRole);
+        box.addButton(QMessageBox::Cancel);
+        box.exec();
+        if (box.clickedButton() != apply)
+            return;
+        QDir().mkpath(QFileInfo(fullPath).absolutePath());
+        QFile file(fullPath);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+            toast(QStringLiteral("Could not save %1").arg(path), QStringLiteral("close"));
+            return;
+        }
+        file.write(content.toUtf8());
+        file.close();
+        toast(QStringLiteral("Saved %1").arg(path), QStringLiteral("check"));
+        QJsonObject conv = conversations_.get(conversationId());
+        if (!conv.isEmpty()) {
+            QJsonArray messages = conv.value(QStringLiteral("messages")).toArray();
+            if (messageIndex >= 0 && messageIndex < messages.size()) {
+                QJsonObject message = messages.at(messageIndex).toObject();
+                QJsonArray edits = message.value(QStringLiteral("edits")).toArray();
+                for (int i = 0; i < edits.size(); ++i) {
+                    QJsonObject e = edits.at(i).toObject();
+                    if (e.value(QStringLiteral("path")).toString() == path) {
+                        e.insert(QStringLiteral("applied"), true);
+                        edits.replace(i, e);
+                    }
+                }
+                message.insert(QStringLiteral("edits"), edits);
+                messages.replace(messageIndex, message);
+                conv.insert(QStringLiteral("messages"), messages);
+                conversations_.updateMessage(conversationId(), messageIndex, message);
+            }
+        }
+        if (hasConversation_ && conversationId() == conversation_.value(QStringLiteral("id")).toString()) {
+            conversation_ = conversations_.get(conversationId());
+            chat_->refresh(conversation_);
+        }
         return;
     }
     ProjectSummary project;
@@ -1905,6 +2241,15 @@ void MainWindow::openSettings()
     }
     auto *dialog = new SettingsDialog(&config_, this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
+    const QString previousPalette = config_.str(QStringLiteral("palette"));
+    connect(dialog, &SettingsDialog::palettePreviewRequested, this, [this](const QString &id) {
+        if (theme::loadPalette(id))
+            applyTheme();
+    });
+    connect(dialog, &QDialog::rejected, this, [this, previousPalette]() {
+        theme::loadPalette(previousPalette);
+        applyTheme();
+    });
     connect(dialog, &QDialog::accepted, this, [this]() {
         if (backend_)
             backend_->reloadConfig();

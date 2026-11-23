@@ -1,0 +1,22 @@
+{
+  "name": "Dracula",
+  "WHITE": "#282A36",
+  "INK": "#F8F8F2",
+  "INK_SOFT": "#E9E9F4",
+  "MUTED": "#6272A4",
+  "FAINT": "#44475A",
+  "LINE": "#6272A4",
+  "LINE_SOFT": "#44475A",
+  "BORDER": "#44475A",
+  "HOVER": "#44475A",
+  "ACTIVE": "#44475A",
+  "SEARCH_BG": "#21222C",
+  "CHIP": "#44475A",
+  "DANGER": "#FF5555",
+  "SUCCESS": "#50FA7B",
+  "CODE_RED": "#FF5555",
+  "CODE_GREEN": "#50FA7B",
+  "CODE_BLUE": "#8BE9FD",
+  "ERROR_BG": "#3A2A2A",
+  "ERROR_LINE": "#FF5555"
+}

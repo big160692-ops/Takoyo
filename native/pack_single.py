@@ -96,9 +96,11 @@ END
     return resource
 
 
-def run(command: list[str]) -> None:
+def run(command: list[str], cwd: Path | None = None) -> None:
     print('+', ' '.join(command))
-    subprocess.run(command, check=True)
+    env = os.environ.copy()
+    env['PATH'] = str(MINGW) + os.pathsep + env.get('PATH', '')
+    subprocess.run(command, check=True, cwd=str(cwd) if cwd else None, env=env)
 
 
 def main() -> int:
@@ -125,7 +127,7 @@ def main() -> int:
     windres = MINGW / 'windres.exe'
     compiler = MINGW / 'g++.exe'
     object_file = WORK / 'payload_res.o'
-    run([str(windres), str(resource), '-O', 'coff', '-o', str(object_file)])
+    run([str(windres), str(resource), '-O', 'coff', '-o', str(object_file)], cwd=WORK)
     run([
         str(compiler),
         '-O2',

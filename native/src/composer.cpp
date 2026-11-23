@@ -15,7 +15,9 @@
 #include <QLabel>
 #include <QPainter>
 #include <QPlainTextEdit>
+#include <QPushButton>
 #include <QResizeEvent>
+#include <QStringList>
 #include <QTextCursor>
 #include <QVBoxLayout>
 
@@ -24,6 +26,10 @@ QString shortName(const QString &name, int limit = 26)
 {
     return util::shorten(name, limit);
 }
+
+// Response-style presets offered by the composer's "Balanced" chip.
+const QStringList kPresets = {QStringLiteral("Concise"), QStringLiteral("Balanced"),
+                              QStringLiteral("Detailed")};
 } // namespace
 
 Composer::Composer(QWidget *parent)
@@ -42,8 +48,9 @@ Composer::Composer(QWidget *parent)
     edit_->setAccessibleDescription(QStringLiteral("Type a message. Press Enter to send, Shift+Enter for a new line."));
     edit_->setFont(theme::font(15));
     edit_->setStyleSheet(QStringLiteral(
-        "QPlainTextEdit{background:transparent;border:none;color:#0B0B0D;"
-        "selection-background-color:#EDEDEF;padding:0px;}"));
+        "QPlainTextEdit{background:transparent;border:none;color:%1;"
+        "selection-background-color:%2;padding:0px;}")
+        .arg(theme::INK.name(), theme::ACTIVE.name()));
     edit_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     edit_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     edit_->setMinimumHeight(64);
@@ -57,9 +64,9 @@ Composer::Composer(QWidget *parent)
 
     placeholder_ = new QLabel(this);
     placeholder_->setFont(theme::font(16));
-    placeholder_->setStyleSheet(QStringLiteral("color:#8B8B8F;background:transparent;"));
+    placeholder_->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::MUTED.name()));
     placeholder_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
-    placeholder_->setText(QStringLiteral("Press and Type to start..."));
+    placeholder_->setText(QStringLiteral("Ask anything, or describe what to build…"));
 
     bottom_ = new QWidget(this);
     bottom_->setFixedHeight(38);
@@ -68,23 +75,54 @@ Composer::Composer(QWidget *parent)
     bottomLayout->setSpacing(0);
 
     attachBtn_ = new IconButton(QStringLiteral("paperclip"), 19, bottom_);
-    attachBtn_->setColor(theme::INK_SOFT);
-    attachBtn_->setHoverColor(theme::INK);
+    attachBtn_->setColor(&theme::INK_SOFT);
+    attachBtn_->setHoverColor(&theme::INK);
     attachBtn_->setToolTip(QStringLiteral("Attach a file"));
     connect(attachBtn_, &QAbstractButton::clicked, this, &Composer::attachFile);
     bottomLayout->addWidget(attachBtn_);
+
+    folderBtn_ = new IconButton(QStringLiteral("folder"), 19, bottom_);
+    folderBtn_->setColor(&theme::INK_SOFT);
+    folderBtn_->setHoverColor(&theme::INK);
+    folderBtn_->setToolTip(QStringLiteral("Pick a working folder for created files"));
+    connect(folderBtn_, &QAbstractButton::clicked, this, [this]() {
+        if (!folderPath_.isEmpty()) {
+            folderPath_.clear();
+            folderLabel_->hide();
+            folderBtn_->setToolTip(QStringLiteral("Pick a working folder for created files"));
+            emit folderChanged(QString());
+            return;
+        }
+        const QString dir = QFileDialog::getExistingDirectory(
+            this, QStringLiteral("Pick a working folder"), QDir::homePath());
+        if (dir.isEmpty())
+            return;
+        folderPath_ = dir;
+        folderLabel_->setText(util::shorten(QFileInfo(dir).fileName(), 20));
+        folderLabel_->show();
+        folderBtn_->setToolTip(QStringLiteral("Clear working folder"));
+        emit folderChanged(dir);
+    });
+    bottomLayout->addWidget(folderBtn_);
+
+    folderLabel_ = new QLabel(bottom_);
+    folderLabel_->setFont(theme::font(10, QStringLiteral("medium")));
+    folderLabel_->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::INK_SOFT.name()));
+    folderLabel_->hide();
+    bottomLayout->addWidget(folderLabel_);
+    bottomLayout->addSpacing(4);
 
     chip_ = new QWidget(bottom_);
     chip_->setStyleSheet(QStringLiteral("background:transparent;"));
     auto *chipLayout = new QHBoxLayout(chip_);
     chipLayout->setContentsMargins(0, 0, 0, 0);
     chipLayout->setSpacing(4);
-    auto *chipBody = new QWidget(chip_);
-    chipBody->setStyleSheet(QStringLiteral("background:#F2F2F3;border-radius:8px;"));
-    auto *chipInner = new QHBoxLayout(chipBody);
+    chipBody_ = new QWidget(chip_);
+    chipBody_->setStyleSheet(QStringLiteral("background:%1;border-radius:8px;").arg(theme::CHIP.name()));
+    auto *chipInner = new QHBoxLayout(chipBody_);
     chipInner->setContentsMargins(6, 3, 4, 3);
     chipInner->setSpacing(4);
-    auto *clip = new QWidget(chipBody);
+    auto *clip = new QWidget(chipBody_);
     clip->setFixedSize(11, 11);
     class MiniIcon : public QWidget {
     public:
@@ -98,27 +136,44 @@ Composer::Composer(QWidget *parent)
             icons::paint(painter, name, rect(), color);
         }
     };
-    auto *clipIcon = new MiniIcon(QStringLiteral("paperclip"), theme::MUTED, chipBody);
+    auto *clipIcon = new MiniIcon(QStringLiteral("paperclip"), theme::MUTED, chipBody_);
     clipIcon->setFixedSize(11, 11);
     chipInner->addWidget(clipIcon);
-    chipLabel_ = new QLabel(chipBody);
+    chipLabel_ = new QLabel(chipBody_);
     chipLabel_->setFont(theme::font(10, QStringLiteral("medium")));
-    chipLabel_->setStyleSheet(QStringLiteral("color:#3A3B3E;background:transparent;"));
+    chipLabel_->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::INK_SOFT.name()));
     chipInner->addWidget(chipLabel_);
-    auto *chipClose = new IconButton(QStringLiteral("close"), 11, chipBody);
-    chipClose->setColor(theme::MUTED);
-    chipClose->setHoverColor(theme::INK);
+    auto *chipClose = new IconButton(QStringLiteral("close"), 11, chipBody_);
+    chipClose->setColor(&theme::MUTED);
+    chipClose->setHoverColor(&theme::INK);
     chipClose->setToolTip(QStringLiteral("Remove attachment"));
     connect(chipClose, &QAbstractButton::clicked, this, &Composer::clearAttachment);
     chipInner->addWidget(chipClose);
-    chipLayout->addWidget(chipBody);
+    chipLayout->addWidget(chipBody_);
     chip_->hide();
     bottomLayout->addWidget(chip_);
+
+    presetBtn_ = new QPushButton(kPresets.at(presetIndex_), bottom_);
+    presetBtn_->setCursor(Qt::PointingHandCursor);
+    presetBtn_->setFixedHeight(26);
+    presetBtn_->setFont(theme::font(11, QStringLiteral("medium")));
+    presetBtn_->setToolTip(QStringLiteral("Response style"));
+    presetBtn_->setAccessibleName(QStringLiteral("Response style"));
+    presetBtn_->setAccessibleDescription(QStringLiteral("Cycle the response style: Concise, Balanced, Detailed."));
+    presetBtn_->setStyleSheet(QStringLiteral(
+        "QPushButton{background:transparent;color:%1;border:1px solid %2;"
+        "border-radius:13px;padding:0 13px;}"
+        "QPushButton:hover{background:%3;}"
+        "QPushButton:focus{border:1px solid %1;}")
+        .arg(theme::INK.name(), theme::BORDER.name(), theme::HOVER.name()));
+    connect(presetBtn_, &QPushButton::clicked, this, &Composer::cyclePreset);
+    bottomLayout->addWidget(presetBtn_);
+    bottomLayout->addSpacing(8);
     bottomLayout->addStretch(1);
 
     micBtn_ = new IconButton(QStringLiteral("mic"), 19, bottom_);
-    micBtn_->setColor(theme::MUTED);
-    micBtn_->setHoverColor(theme::INK);
+    micBtn_->setColor(&theme::MUTED);
+    micBtn_->setHoverColor(&theme::INK);
     micBtn_->setToolTip(QStringLiteral("Voice input"));
     connect(micBtn_, &QAbstractButton::clicked, this, &Composer::voiceRequested);
     bottomLayout->addWidget(micBtn_);
@@ -141,6 +196,42 @@ Composer::Composer(QWidget *parent)
     connect(&thinkTimer_, &QTimer::timeout, this, &Composer::tickThinking);
     refreshButtons();
     updatePlaceholder();
+}
+
+void Composer::applyTheme()
+{
+    edit_->setStyleSheet(QStringLiteral(
+        "QPlainTextEdit{background:transparent;border:none;color:%1;"
+        "selection-background-color:%2;padding:0px;}")
+        .arg(theme::INK.name(), theme::ACTIVE.name()));
+    placeholder_->setStyleSheet(
+        QStringLiteral("color:%1;background:transparent;").arg(theme::MUTED.name()));
+    if (folderLabel_)
+        folderLabel_->setStyleSheet(
+            QStringLiteral("color:%1;background:transparent;").arg(theme::INK_SOFT.name()));
+    chipBody_->setStyleSheet(
+        QStringLiteral("background:%1;border-radius:8px;").arg(theme::CHIP.name()));
+    chipLabel_->setStyleSheet(
+        QStringLiteral("color:%1;background:transparent;").arg(theme::INK_SOFT.name()));
+    presetBtn_->setStyleSheet(QStringLiteral(
+        "QPushButton{background:transparent;color:%1;border:1px solid %2;"
+        "border-radius:13px;padding:0 13px;}"
+        "QPushButton:hover{background:%3;}"
+        "QPushButton:focus{border:1px solid %1;}")
+        .arg(theme::INK.name(), theme::BORDER.name(), theme::HOVER.name()));
+}
+
+void Composer::setFolder(const QString &path)
+{
+    folderPath_ = path;
+    if (path.isEmpty()) {
+        folderLabel_->hide();
+        folderBtn_->setToolTip(QStringLiteral("Pick a working folder for created files"));
+    } else {
+        folderLabel_->setText(util::shorten(QFileInfo(path).fileName(), 20));
+        folderLabel_->show();
+        folderBtn_->setToolTip(QStringLiteral("Clear working folder"));
+    }
 }
 
 QString Composer::text() const
@@ -325,6 +416,15 @@ void Composer::refreshButtons()
     }
 }
 
+void Composer::cyclePreset()
+{
+    presetIndex_ = (presetIndex_ + 1) % kPresets.size();
+    const QString preset = kPresets.at(presetIndex_);
+    if (presetBtn_)
+        presetBtn_->setText(preset);
+    emit presetChanged(preset);
+}
+
 void Composer::updatePlaceholder()
 {
     const bool show = thinking_ ? true : edit_->toPlainText().isEmpty();
@@ -340,7 +440,7 @@ void Composer::updatePlaceholder()
         placeholder_->setText(QStringLiteral("  ") + thinkBase_ + QString(dots, QChar('.')));
     } else {
         placeholder_->setPixmap(QPixmap());
-        placeholder_->setText(QStringLiteral("Press and Type to start..."));
+        placeholder_->setText(QStringLiteral("Ask anything, or describe what to build…"));
     }
     placeholder_->adjustSize();
     placeholder_->move(18, 13);

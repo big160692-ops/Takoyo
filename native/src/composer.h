@@ -8,6 +8,7 @@ class QLabel;
 class QPlainTextEdit;
 class IconButton;
 class CircleButton;
+class QPushButton;
 
 class Composer : public QWidget {
     Q_OBJECT
@@ -23,12 +24,16 @@ public:
     QJsonObject attachment() const;
     void clearAttachment();
     void setStopVisible(bool visible);
+    void applyTheme();
+    void setFolder(const QString &path);
 
 signals:
     void submitted();
     void stopRequested();
     void voiceRequested();
     void changed();
+    void presetChanged(const QString &preset);
+    void folderChanged(const QString &path);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -40,17 +45,24 @@ private:
     void attachFile();
     void updatePlaceholder();
     void tickThinking();
+    void cyclePreset();
 
     QPlainTextEdit *edit_ = nullptr;
     QLabel *placeholder_ = nullptr;
     QWidget *bottom_ = nullptr;
     QWidget *chip_ = nullptr;
+    QWidget *chipBody_ = nullptr;
     QLabel *chipLabel_ = nullptr;
     IconButton *attachBtn_ = nullptr;
+    IconButton *folderBtn_ = nullptr;
+    QLabel *folderLabel_ = nullptr;
+    QString folderPath_;
+    QPushButton *presetBtn_ = nullptr;
     IconButton *micBtn_ = nullptr;
     CircleButton *sendBtn_ = nullptr;
     CircleButton *stopBtn_ = nullptr;
 
+    int presetIndex_ = 1;
     bool thinking_ = false;
     bool stopVisible_ = false;
     bool attachmentLoaded_ = false;

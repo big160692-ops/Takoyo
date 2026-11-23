@@ -1,0 +1,22 @@
+{
+  "name": "Midnight Blue",
+  "WHITE": "#0F172A",
+  "INK": "#F1F5F9",
+  "INK_SOFT": "#CBD5E1",
+  "MUTED": "#64748B",
+  "FAINT": "#1E293B",
+  "LINE": "#334155",
+  "LINE_SOFT": "#1E293B",
+  "BORDER": "#334155",
+  "HOVER": "#1E293B",
+  "ACTIVE": "#1E293B",
+  "SEARCH_BG": "#020617",
+  "CHIP": "#1E293B",
+  "DANGER": "#F87171",
+  "SUCCESS": "#34D399",
+  "CODE_RED": "#F87171",
+  "CODE_GREEN": "#34D399",
+  "CODE_BLUE": "#60A5FA",
+  "ERROR_BG": "#2A1A1A",
+  "ERROR_LINE": "#F87171"
+}

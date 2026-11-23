@@ -22,6 +22,7 @@ public:
     void refresh(const QJsonObject &conversation);
     void clear();
     void scrollToBottom();
+    void applyTheme();
 
     void startStream();
     void appendStream(const QString &text);

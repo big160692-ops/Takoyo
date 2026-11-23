@@ -68,19 +68,22 @@ QLabel *makeLabel(const QString &text, int size, const QColor &color, const QStr
     return label;
 }
 
-void addSectionHeading(QVBoxLayout *layout, const QString &text, QWidget *parent, std::function<void()> onNew = {})
+void addSectionHeading(QVBoxLayout *layout, const QString &text, QWidget *parent,
+                      std::function<void()> onNew = {}, QLabel **outLabel = nullptr)
 {
     auto *head = new QWidget(parent);
     auto *row = new QHBoxLayout(head);
     row->setContentsMargins(10, 0, 10, 0);
     row->setSpacing(0);
     auto *label = makeLabel(text, 11, theme::INK, QStringLiteral("semibold"), head);
+    if (outLabel)
+        *outLabel = label;
     row->addWidget(label);
     row->addStretch(1);
     if (onNew) {
         auto *plus = new IconButton(QStringLiteral("plus"), 17, head);
-        plus->setColor(theme::INK);
-        plus->setHoverColor(theme::INK);
+        plus->setColor(&theme::INK);
+        plus->setHoverColor(&theme::INK);
         plus->setToolTip(QStringLiteral("New project"));
         QObject::connect(plus, &QAbstractButton::clicked, plus, onNew);
         row->addWidget(plus);
@@ -101,8 +104,8 @@ Sidebar::Sidebar(QWidget *parent)
 
     auto *card = new RoundedCard(this);
     card->setRadius(22);
-    card->setFill(theme::WHITE);
-    card->setOutline(theme::INK);
+    card->setFill(&theme::WHITE);
+    card->setOutline(&theme::INK);
     card->setThickness(1.6);
     card->setPadding(8);
     outer->addWidget(card);
@@ -114,8 +117,8 @@ Sidebar::Sidebar(QWidget *parent)
     headLayout->setContentsMargins(18, 16, 18, 12);
     headLayout->setSpacing(9);
     auto *toggle = new IconButton(QStringLiteral("sidebar"), 24, head);
-    toggle->setColor(theme::INK);
-    toggle->setHoverColor(theme::INK);
+    toggle->setColor(&theme::INK);
+    toggle->setHoverColor(&theme::INK);
     toggle->setToolTip(QStringLiteral("Hide sidebar"));
     connect(toggle, &QAbstractButton::clicked, this, &Sidebar::hideRequested);
     headLayout->addWidget(toggle);
@@ -137,30 +140,34 @@ Sidebar::Sidebar(QWidget *parent)
     searchLayout->addWidget(search_);
     body->addWidget(searchWrap);
 
-    auto *scroll = new QScrollArea(card);
+    scrollArea_ = new QScrollArea(card);
+    auto *scroll = scrollArea_;
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scroll->setStyleSheet(QStringLiteral(
         "QScrollArea{background:transparent;border:none;}"
         "QScrollBar:vertical{width:8px;background:transparent;margin:2px 0 2px 0;}"
-        "QScrollBar::handle:vertical{background:#E7E7E9;border-radius:4px;min-height:30px;}"
+        "QScrollBar::handle:vertical{background:%1;border-radius:4px;min-height:30px;}"
         "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
-        "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}"));
+        "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}")
+        .arg(theme::LINE_SOFT.name()));
     auto *content = new QWidget(scroll);
     content->setStyleSheet(QStringLiteral("background:transparent;"));
     auto *contentLayout = new QVBoxLayout(content);
     contentLayout->setContentsMargins(0, 0, 0, 4);
     contentLayout->setSpacing(3);
 
-    addSectionHeading(contentLayout, QStringLiteral("PROJECTS"), content, [this]() { emit newProjectRequested(); });
+    addSectionHeading(contentLayout, QStringLiteral("PROJECTS"), content,
+                      [this]() { emit newProjectRequested(); }, &projectsHeading_);
     auto *projectsHost = new QWidget(content);
     projectsBox_ = new QVBoxLayout(projectsHost);
     projectsBox_->setContentsMargins(4, 0, 4, 10);
     projectsBox_->setSpacing(2);
     contentLayout->addWidget(projectsHost);
 
-    addSectionHeading(contentLayout, QStringLiteral("RECENTS"), content);
+    addSectionHeading(contentLayout, QStringLiteral("RECENTS"), content,
+                      [this]() { emit newChatRequested(); }, &recentsHeading_);
     auto *recentsHost = new QWidget(content);
     recentsBox_ = new QVBoxLayout(recentsHost);
     recentsBox_->setContentsMargins(4, 0, 4, 12);
@@ -174,9 +181,10 @@ Sidebar::Sidebar(QWidget *parent)
     auto *footerLayout = new QVBoxLayout(footer);
     footerLayout->setContentsMargins(0, 0, 0, 0);
     footerLayout->setSpacing(0);
-    auto *line = new QWidget(footer);
+    divider_ = new QWidget(footer);
+    auto *line = divider_;
     line->setFixedHeight(1);
-    line->setStyleSheet(QStringLiteral("background:#E7E7E9;"));
+    line->setStyleSheet(QStringLiteral("background:%1;").arg(theme::LINE_SOFT.name()));
     auto *lineWrap = new QWidget(footer);
     auto *lineLayout = new QHBoxLayout(lineWrap);
     lineLayout->setContentsMargins(16, 4, 16, 0);
@@ -193,11 +201,18 @@ Sidebar::Sidebar(QWidget *parent)
     statusLayout->addWidget(statusLabel_);
     statusLayout->addStretch(1);
     auto *gear = new IconButton(QStringLiteral("gear"), 15, status);
-    gear->setColor(theme::MUTED);
-    gear->setHoverColor(theme::INK);
+    gear->setColor(&theme::MUTED);
+    gear->setHoverColor(&theme::INK);
     gear->setToolTip(QStringLiteral("Settings"));
     connect(gear, &QAbstractButton::clicked, this, &Sidebar::settingsRequested);
     statusLayout->addWidget(gear);
+
+    auto *paletteBtn = new IconButton(QStringLiteral("palette"), 15, status);
+    paletteBtn->setColor(&theme::MUTED);
+    paletteBtn->setHoverColor(&theme::INK);
+    paletteBtn->setToolTip(QStringLiteral("Colour theme"));
+    connect(paletteBtn, &QAbstractButton::clicked, this, &Sidebar::paletteRequested);
+    statusLayout->addWidget(paletteBtn);
     connect(status, &HoverRow::clicked, this, &Sidebar::settingsRequested);
     auto *statusWrap = new QWidget(footer);
     auto *statusWrapLayout = new QHBoxLayout(statusWrap);
@@ -296,8 +311,8 @@ void Sidebar::buildProjectRow(QVBoxLayout *box, const ProjectSummary &project, b
     layout->addWidget(text, 1);
 
     auto *more = new IconButton(QStringLiteral("more"), 14, row);
-    more->setColor(theme::MUTED);
-    more->setHoverColor(theme::INK);
+    more->setColor(&theme::MUTED);
+    more->setHoverColor(&theme::INK);
     more->setToolTip(QStringLiteral("Project options"));
     connect(more, &QAbstractButton::clicked, this, [this, row, project]() {
         emit projectMenuRequested(project.id, row->mapToGlobal(QPoint(row->width() - 4, row->height())));
@@ -356,4 +371,26 @@ void Sidebar::setStatus(const QString &text, const QColor &color, bool pulsing)
     statusLabel_->setText(text);
     dot_->setColor(color);
     dot_->setPulsing(pulsing);
+}
+
+void Sidebar::applyTheme()
+{
+    scrollArea_->setStyleSheet(QStringLiteral(
+        "QScrollArea{background:transparent;border:none;}"
+        "QScrollBar:vertical{width:8px;background:transparent;margin:2px 0 2px 0;}"
+        "QScrollBar::handle:vertical{background:%1;border-radius:4px;min-height:30px;}"
+        "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
+        "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}")
+        .arg(theme::LINE_SOFT.name()));
+    divider_->setStyleSheet(QStringLiteral("background:%1;").arg(theme::LINE_SOFT.name()));
+    search_->applyTheme();
+    if (projectsHeading_)
+        projectsHeading_->setStyleSheet(
+            QStringLiteral("color:%1;background:transparent;").arg(theme::INK.name()));
+    if (recentsHeading_)
+        recentsHeading_->setStyleSheet(
+            QStringLiteral("color:%1;background:transparent;").arg(theme::INK.name()));
+    if (statusLabel_)
+        statusLabel_->setStyleSheet(
+            QStringLiteral("color:%1;background:transparent;").arg(theme::MUTED.name()));
 }

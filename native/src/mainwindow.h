@@ -53,6 +53,7 @@ private:
     void loadConversation(const QString &id);
     void closeProject();
     void refreshSidebar();
+    void applyTheme();
     void syncBusy();
     void updateStatus(const QJsonObject &health = QJsonObject());
     void toast(const QString &text, const QString &icon = QStringLiteral("check"));
@@ -106,9 +107,14 @@ private:
     SlideHost *artHost_ = nullptr;
     QStackedWidget *stack_ = nullptr;
     QWidget *logo_ = nullptr;
+    QWidget *mainArea_ = nullptr;
+    QWidget *header_ = nullptr;
+    QWidget *body_ = nullptr;
     IconButton *artButton_ = nullptr;
     QPointer<QWidget> filesDialog_;
     QPointer<QWidget> settingsDialog_;
+QPointer<QWidget> paletteDialog_;
+QString workingFolder_;
 
     QVariantAnimation *sidebarAnim_ = nullptr;
     QVariantAnimation *artAnim_ = nullptr;

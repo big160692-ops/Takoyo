@@ -21,9 +21,21 @@
 
 QPixmap mascotPixmap(int size)
 {
+    // Choose the mascot asset that contrasts with the current palette's ground:
+    // a light ground needs the dark mascot, a dark ground needs the white one.
+    const bool lightGround = theme::WHITE.lightness() > 128;
+    const QString asset = lightGround ? QStringLiteral("mascot.png")
+                                     : QStringLiteral("mascot_white.png");
+
     static QPixmap source;
-    if (source.isNull())
-        source.load(QDir(util::assetsDir()).filePath(QStringLiteral("mascot.png")));
+    static QString cachedAsset;
+    if (source.isNull() || cachedAsset != asset) {
+        source = QPixmap();
+        source.load(QDir(util::assetsDir()).filePath(asset));
+        if (source.isNull() && asset != QStringLiteral("mascot.png"))
+            source.load(QDir(util::assetsDir()).filePath(QStringLiteral("mascot.png")));
+        cachedAsset = asset;
+    }
     if (source.isNull())
         return {};
     return source.scaled(size, size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
@@ -36,8 +48,11 @@ namespace {
 QImage thinkingInk()
 {
     static QImage ink;
-    if (!ink.isNull())
+    static QColor cachedInk;
+    if (!ink.isNull() && cachedInk == theme::INK)
         return ink;
+    ink = QImage();
+    cachedInk = theme::INK;
     QImage raw;
     if (!raw.load(QDir(util::assetsDir()).filePath(QStringLiteral("Mascot thinking.jpg"))))
         return ink;
@@ -59,12 +74,14 @@ QImage thinkingInk()
             }
         }
     }
-    if (right > left && bottom > top) {
-        const int margin = qMax(2, qMin(raw.width(), raw.height()) / 60);
-        const QRect box(qMax(0, left - margin), qMax(0, top - margin),
-                        qMin(raw.width() - 1, right + margin) - qMax(0, left - margin) + 1,
-                        qMin(raw.height() - 1, bottom + margin) - qMax(0, top - margin) + 1);
-        ink = out.copy(box);
+    // crop
+    if (right >= left && bottom >= top) {
+        const int w = right - left + 1;
+        const int h = bottom - top + 1;
+        QImage cropped(w, h, QImage::Format_ARGB32_Premultiplied);
+        for (int y = 0; y < h; ++y)
+            memcpy(cropped.scanLine(y), out.constScanLine(top + y) + left * 4, w * 4);
+        ink = cropped;
     } else {
         ink = out;
     }
@@ -76,6 +93,11 @@ QImage thinkingInk()
 QPixmap thinkingPixmap(int size)
 {
     static QHash<int, QPixmap> cache;
+    static QColor cachedInk;
+    if (cachedInk != theme::INK) {
+        cache.clear();
+        cachedInk = theme::INK;
+    }
     const auto found = cache.constFind(size);
     if (found != cache.constEnd())
         return found.value();
@@ -109,12 +131,30 @@ void RoundedCard::setRadius(int radius)
 void RoundedCard::setFill(const QColor &fill)
 {
     fill_ = fill;
+    fillPtr_ = nullptr;
+    update();
+}
+
+void RoundedCard::setFill(const QColor *fill)
+{
+    fillPtr_ = fill;
+    if (fill)
+        fill_ = *fill;
     update();
 }
 
 void RoundedCard::setOutline(const QColor &outline)
 {
     outline_ = outline;
+    outlinePtr_ = nullptr;
+    update();
+}
+
+void RoundedCard::setOutline(const QColor *outline)
+{
+    outlinePtr_ = outline;
+    if (outline)
+        outline_ = *outline;
     update();
 }
 
@@ -135,10 +175,14 @@ void RoundedCard::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
-    const qreal inset = outline_.isValid() ? thickness_ / 2.0 : 0.0;
+    // Palette-tracked colours are read live so a palette switch repaints here.
+    const QColor fill = fillPtr_ ? *fillPtr_ : fill_;
+    const QColor outline = outlinePtr_ ? *outlinePtr_ : outline_;
+    const bool hasOutline = outline.isValid();
+    const qreal inset = hasOutline ? thickness_ / 2.0 : 0.0;
     const QRectF rect = QRectF(this->rect()).adjusted(inset, inset, -inset, -inset);
-    painter.setBrush(fill_);
-    painter.setPen(outline_.isValid() ? QPen(outline_, thickness_) : QPen(Qt::NoPen));
+    painter.setBrush(fill);
+    painter.setPen(hasOutline ? QPen(outline, thickness_) : QPen(Qt::NoPen));
     painter.drawRoundedRect(rect, radius_, radius_);
 }
 
@@ -193,12 +237,30 @@ void IconButton::setIconName(const QString &icon)
 void IconButton::setColor(const QColor &color)
 {
     color_ = color;
+    colorPtr_ = nullptr;
+    update();
+}
+
+void IconButton::setColor(const QColor *color)
+{
+    colorPtr_ = color;
+    if (color)
+        color_ = *color;
     update();
 }
 
 void IconButton::setHoverColor(const QColor &color)
 {
     hoverColor_ = color;
+    hoverColorPtr_ = nullptr;
+    update();
+}
+
+void IconButton::setHoverColor(const QColor *color)
+{
+    hoverColorPtr_ = color;
+    if (color)
+        hoverColor_ = *color;
     update();
 }
 
@@ -211,12 +273,30 @@ void IconButton::setHoverBackground(const QColor &color)
 void IconButton::setCircleFill(const QColor &color)
 {
     circleFill_ = color;
+    circleFillPtr_ = nullptr;
+    update();
+}
+
+void IconButton::setCircleFill(const QColor *color)
+{
+    circleFillPtr_ = color;
+    if (color)
+        circleFill_ = *color;
     update();
 }
 
 void IconButton::setCircleOutline(const QColor &color)
 {
     circleOutline_ = color;
+    circleOutlinePtr_ = nullptr;
+    update();
+}
+
+void IconButton::setCircleOutline(const QColor *color)
+{
+    circleOutlinePtr_ = color;
+    if (color)
+        circleOutline_ = *color;
     update();
 }
 
@@ -229,17 +309,22 @@ void IconButton::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
+    // Palette-tracked colours are read live so a palette switch repaints here.
+    const QColor color = colorPtr_ ? *colorPtr_ : color_;
+    const QColor hoverColor = hoverColorPtr_ ? *hoverColorPtr_ : hoverColor_;
+    const QColor circleFill = circleFillPtr_ ? *circleFillPtr_ : circleFill_;
+    const QColor circleOutline = circleOutlinePtr_ ? *circleOutlinePtr_ : circleOutline_;
     const QRectF full = QRectF(this->rect());
-    if (circleFill_.alpha() > 0) {
-        painter.setPen(circleOutline_.alpha() > 0 ? QPen(circleOutline_, 1.2) : QPen(Qt::NoPen));
-        painter.setBrush(circleFill_);
+    if (circleFill.alpha() > 0) {
+        painter.setPen(circleOutline.alpha() > 0 ? QPen(circleOutline, 1.2) : QPen(Qt::NoPen));
+        painter.setBrush(circleFill);
         painter.drawEllipse(full.adjusted(1, 1, -1, -1));
     } else if (isEnabled() && underMouse() && hoverBackground_.alpha() > 0) {
         painter.setPen(Qt::NoPen);
         painter.setBrush(hoverBackground_);
         painter.drawRoundedRect(full, 9, 9);
     }
-    const QColor tint = isEnabled() ? (underMouse() && hoverColor_.isValid() ? hoverColor_ : color_) : theme::FAINT;
+    const QColor tint = isEnabled() ? (underMouse() && hoverColor.isValid() ? hoverColor : color) : theme::FAINT;
     const qreal side = iconSize_;
     const QRectF iconRect((width() - side) / 2.0, (height() - side) / 2.0, side, side);
     icons::paint(painter, icon_, iconRect, tint);
@@ -266,9 +351,9 @@ CircleButton::CircleButton(const QString &icon, int diameter, QWidget *parent)
     : IconButton(icon, static_cast<int>(diameter * 0.42), parent)
 {
     setFixedSize(diameter, diameter);
-    setCircleFill(theme::INK);
-    setColor(theme::WHITE);
-    setHoverColor(theme::WHITE);
+    setCircleFill(&theme::INK);
+    setColor(&theme::WHITE);
+    setHoverColor(&theme::WHITE);
 }
 
 // ---------------------------------------------------------------------------
@@ -368,10 +453,16 @@ StatusDot::StatusDot(int size, QWidget *parent)
         phase_ += 0.09;
         const qreal wave = (std::sin(phase_) + 1.0) / 2.0;
         const qreal t = 0.15 + wave * 0.55;
+        // Pulse highlight: SUCCESS tinted 20% toward INK so the glow adapts to
+        // the active palette (replaces a hardcoded #5AC98D from the light theme).
+        const QColor tint(
+            static_cast<int>(theme::SUCCESS.red() + (theme::INK.red() - theme::SUCCESS.red()) * 0.2),
+            static_cast<int>(theme::SUCCESS.green() + (theme::INK.green() - theme::SUCCESS.green()) * 0.2),
+            static_cast<int>(theme::SUCCESS.blue() + (theme::INK.blue() - theme::SUCCESS.blue()) * 0.2));
         color_ = QColor(
-            static_cast<int>(theme::SUCCESS.red() + (0x5A - theme::SUCCESS.red()) * t),
-            static_cast<int>(theme::SUCCESS.green() + (0xC9 - theme::SUCCESS.green()) * t),
-            static_cast<int>(theme::SUCCESS.blue() + (0x8D - theme::SUCCESS.blue()) * t));
+            static_cast<int>(theme::SUCCESS.red() + (tint.red() - theme::SUCCESS.red()) * t),
+            static_cast<int>(theme::SUCCESS.green() + (tint.green() - theme::SUCCESS.green()) * t),
+            static_cast<int>(theme::SUCCESS.blue() + (tint.blue() - theme::SUCCESS.blue()) * t));
         update();
     });
 }
@@ -444,7 +535,7 @@ Toast::Toast(QWidget *parent, const QString &text, const QString &icon)
 
     auto *label = new QLabel(text, this);
     label->setFont(theme::font(12, QStringLiteral("medium")));
-    label->setStyleSheet(QStringLiteral("color:#0B0B0D;background:transparent;"));
+    label->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::INK.name()));
     layout->addWidget(label);
     adjustSize();
 
@@ -492,10 +583,18 @@ SearchField::SearchField(QWidget *parent)
     edit_->setFont(theme::font(14));
     edit_->setPlaceholderText(QStringLiteral("Search"));
     edit_->setStyleSheet(QStringLiteral(
-        "QLineEdit{background:transparent;border:none;color:#3A3B3E;selection-background-color:#DEDEDF;padding:0px;}"));
+        "QLineEdit{background:transparent;border:none;color:%1;selection-background-color:%2;padding:0px;}")
+        .arg(theme::INK_SOFT.name(), theme::ACTIVE.name()));
     auto *layout = new QHBoxLayout(this);
     layout->setContentsMargins(44, 0, 16, 0);
     layout->addWidget(edit_);
+}
+
+void SearchField::applyTheme()
+{
+    edit_->setStyleSheet(QStringLiteral(
+        "QLineEdit{background:transparent;border:none;color:%1;selection-background-color:%2;padding:0px;}")
+        .arg(theme::INK_SOFT.name(), theme::ACTIVE.name()));
 }
 
 void SearchField::paintEvent(QPaintEvent *)

@@ -20,6 +20,7 @@ public:
     void finishGenerating();
     bool hasArtifact() const { return !meta_.isEmpty(); }
     QJsonObject artifact() const { return meta_; }
+    void applyTheme();
 
 signals:
     void openRequested();

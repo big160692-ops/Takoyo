@@ -1,0 +1,22 @@
+{
+  "name": "Light",
+  "WHITE": "#FFFFFF",
+  "INK": "#0B0B0D",
+  "INK_SOFT": "#3A3B3E",
+  "MUTED": "#8B8B8F",
+  "FAINT": "#B9B9BD",
+  "LINE": "#111113",
+  "LINE_SOFT": "#E7E7E9",
+  "BORDER": "#3A3B3E",
+  "HOVER": "#F4F4F5",
+  "ACTIVE": "#EDEDEF",
+  "SEARCH_BG": "#DEDEDF",
+  "CHIP": "#F2F2F3",
+  "DANGER": "#D9433A",
+  "SUCCESS": "#0F9D58",
+  "CODE_RED": "#E2453C",
+  "CODE_GREEN": "#12A15A",
+  "CODE_BLUE": "#1B4FA0",
+  "ERROR_BG": "#F9ECEA",
+  "ERROR_LINE": "#F0C4C0"
+}

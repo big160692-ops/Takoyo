@@ -463,8 +463,54 @@ ParsedReply parseReply(const QString &text)
         const QString tool = obj.value(QStringLiteral("tool")).toString();
         if (tool == QLatin1String("read_file") || tool == QLatin1String("list_dir")) {
             const QString path = obj.value(QStringLiteral("path")).toString().trimmed();
-            if (!path.isEmpty())
-                parsed.fileRequests.append(FileRequest{path, tool == QLatin1String("list_dir")});
+            if (!path.isEmpty()) {
+                util::FileRequest fr;
+                fr.path = path;
+                fr.listing = (tool == QLatin1String("list_dir"));
+                parsed.fileRequests.append(fr);
+            }
+            continue;
+        }
+        if (tool == QLatin1String("search")) {
+            const QString path = obj.value(QStringLiteral("path")).toString().trimmed();
+            const QString query = obj.value(QStringLiteral("query")).toString().trimmed();
+            if (!query.isEmpty()) {
+                FileRequest req;
+                req.searching = true;
+                req.path = path.isEmpty() ? QString() : path;
+                req.query = query;
+                req.content = obj.value(QStringLiteral("mode")).toString() != QLatin1String("filename");
+                parsed.fileRequests.append(req);
+            }
+            continue;
+        }
+        if (tool == QLatin1String("edit_file")) {
+            const QString path = obj.value(QStringLiteral("path")).toString().trimmed().replace('\\', '/');
+            const QString oldText = obj.value(QStringLiteral("old")).toString();
+            const QString newText = obj.value(QStringLiteral("new")).toString();
+            if (path.isEmpty() || oldText.isEmpty())
+                continue;
+            if (path.split('/').contains(QStringLiteral("..")))
+                continue;
+            EditRequest er;
+            er.path = path;
+            er.oldText = oldText;
+            er.newText = newText;
+            parsed.editRequests.append(er);
+            continue;
+        }
+        if (tool == QLatin1String("open_url")) {
+            const QString url = obj.value(QStringLiteral("url")).toString().trimmed();
+            if (!url.isEmpty())
+                parsed.openUrls.append(url);
+            continue;
+        }
+        if (tool == QLatin1String("open_app")) {
+            const QString app = obj.value(QStringLiteral("app")).toString().trimmed();
+            if (app.isEmpty())
+                continue;
+            const QString path = obj.value(QStringLiteral("path")).toString().trimmed();
+            parsed.openApps.append(path.isEmpty() ? app : path);
             continue;
         }
         if (tool != QLatin1String("write_file"))
@@ -473,8 +519,7 @@ ParsedReply parseReply(const QString &text)
         const QString content = obj.value(QStringLiteral("content")).toString();
         if (path.isEmpty() || !obj.value(QStringLiteral("content")).isString())
             continue;
-        if (path.startsWith('/') || QRegularExpression(QStringLiteral("^[A-Za-z]:")).match(path).hasMatch()
-            || path.split('/').contains(QStringLiteral("..")))
+        if (path.split('/').contains(QStringLiteral("..")))
             continue;
         ToolEdit edit;
         edit.path = path;

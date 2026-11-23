@@ -223,6 +223,19 @@ void paint(QPainter &painter, const QString &name, const QRectF &rect, const QCo
         c.arc(c.box(0.38, 0.18, 0.84, 0.64), 240, 120, color, c.thin);
         c.line({c.at(0.23, 0.70), c.at(0.23, 0.82), c.at(0.77, 0.82), c.at(0.77, 0.70)}, color, c.thin);
         c.line({c.at(0.50, 0.24), c.at(0.50, 0.70)}, color, c.thin);
+    } else if (name == QLatin1String("palette")) {
+        painter.setPen(QPen(color, c.thin));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawEllipse(c.box(0.10, 0.18, 0.90, 0.82));
+        // thumb hole
+        painter.drawEllipse(c.box(0.16, 0.58, 0.34, 0.78));
+        // paint wells
+        painter.setBrush(color);
+        painter.setPen(Qt::NoPen);
+        painter.drawEllipse(c.box(0.30, 0.26, 0.42, 0.38));
+        painter.drawEllipse(c.box(0.50, 0.20, 0.62, 0.32));
+        painter.drawEllipse(c.box(0.70, 0.28, 0.82, 0.40));
+        painter.drawEllipse(c.box(0.56, 0.46, 0.68, 0.58));
     } else {
         painter.setPen(QPen(color, c.thin));
         painter.setBrush(Qt::NoBrush);

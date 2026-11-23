@@ -13,6 +13,7 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QJsonArray>
@@ -67,9 +68,10 @@ public:
     {
         const QString css = QStringLiteral(
             "p{margin:0 0 6px 0;} ul,ol{margin:0 0 6px 12px;} li{margin:0 0 3px 0;}"
-            "h1,h2,h3,h4{font-weight:600;margin:8px 0 6px 0;} code{font-family:Consolas;background:#F2F2F3;}"
-            "pre{background:#F2F2F3;margin:4px 0;padding:2px;} blockquote{color:#3A3B3E;margin:0 0 6px 10px;}"
-            "a{color:#1C55A5;}");
+            "h1,h2,h3,h4{font-weight:600;margin:8px 0 6px 0;} code{font-family:Consolas;background:%1;}"
+            "pre{background:%1;margin:4px 0;padding:2px;} blockquote{color:%2;margin:0 0 6px 10px;}"
+            "a{color:%3;}")
+            .arg(theme::CHIP.name(), theme::INK_SOFT.name(), theme::CODE_BLUE.name());
         document()->setDefaultStyleSheet(css);
         document()->setMarkdown(markdown, QTextDocument::MarkdownDialectGitHub);
         syncHeight();
@@ -136,8 +138,8 @@ public:
         : RoundedCard(parent)
     {
         setRadius(13);
-        setFill(theme::WHITE);
-        setOutline(theme::LINE);
+        setFill(&theme::WHITE);
+        setOutline(&theme::LINE);
         setThickness(1.6);
         setPadding(16);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -150,32 +152,58 @@ public:
         if (!language.isEmpty()) {
             auto *lang = new QLabel(language.toUpper(), head);
             lang->setFont(theme::font(9, QStringLiteral("semibold")));
-            lang->setStyleSheet(QStringLiteral("color:#8B8B8F;background:transparent;"));
+            lang->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::MUTED.name()));
             headLayout->addWidget(lang);
         }
         auto *name = new QLabel(filename.isEmpty() ? (language.isEmpty() ? QStringLiteral("code") : filename)
                                                    : filename,
                                 head);
         name->setFont(theme::font(10, QStringLiteral("medium")));
-        name->setStyleSheet(QStringLiteral("color:#3A3B3E;background:transparent;"));
+        name->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::INK_SOFT.name()));
         headLayout->addWidget(name);
         headLayout->addStretch(1);
 
         auto *copy = new IconButton(QStringLiteral("copy"), 15, head);
         copy->setFixedSize(23, 23);
-        copy->setColor(theme::MUTED);
-        copy->setHoverColor(theme::INK);
+        copy->setColor(&theme::MUTED);
+        copy->setHoverColor(&theme::INK);
         copy->setHoverBackground(theme::HOVER);
         copy->setToolTip(QStringLiteral("Copy"));
         connect(copy, &QAbstractButton::clicked, this, [code]() {
             QApplication::clipboard()->setText(code);
         });
         headLayout->addWidget(copy);
+
+        auto *saveBtn = new IconButton(QStringLiteral("download"), 15, head);
+        saveBtn->setFixedSize(23, 23);
+        saveBtn->setColor(&theme::MUTED);
+        saveBtn->setHoverColor(&theme::INK);
+        saveBtn->setHoverBackground(theme::HOVER);
+        saveBtn->setToolTip(QStringLiteral("Save as file"));
+        connect(saveBtn, &QAbstractButton::clicked, this, [code, filename, language]() {
+            QString suggested = filename;
+            if (suggested.isEmpty()) {
+                const QString ext = language.isEmpty() ? QStringLiteral("txt") : language.toLower();
+                suggested = QStringLiteral("code.") + ext;
+            }
+            const QString path = QFileDialog::getSaveFileName(
+                nullptr, QStringLiteral("Save code"), QDir::homePath() + QStringLiteral("/") + suggested,
+                QStringLiteral("All files (*)"));
+            if (path.isEmpty())
+                return;
+            QFile file(path);
+            if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+                return;
+            }
+            file.write(code.toUtf8());
+            file.close();
+        });
+        headLayout->addWidget(saveBtn);
         if (onApply) {
             auto *apply = new IconButton(QStringLiteral("pencil"), 15, head);
             apply->setFixedSize(23, 23);
-            apply->setColor(theme::MUTED);
-            apply->setHoverColor(theme::INK);
+            apply->setColor(&theme::MUTED);
+            apply->setHoverColor(&theme::INK);
             apply->setHoverBackground(theme::HOVER);
             apply->setToolTip(QStringLiteral("Apply to project"));
             connect(apply, &QAbstractButton::clicked, this, [onApply]() { onApply(); });
@@ -188,8 +216,9 @@ public:
         view->setFrameShape(QFrame::NoFrame);
         view->setFont(theme::mono(13));
         view->setStyleSheet(QStringLiteral(
-            "QPlainTextEdit{background:transparent;border:none;color:#0B0B0D;selection-background-color:#DEDEDF;"
-            "selection-color:#0B0B0D;}"));
+            "QPlainTextEdit{background:transparent;border:none;color:%1;selection-background-color:%2;"
+            "selection-color:%1;}")
+            .arg(theme::INK.name(), theme::ACTIVE.name()));
         view->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
         view->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         view->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -274,16 +303,17 @@ ChatView::ChatView(QWidget *parent)
     scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scroll_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scroll_->setStyleSheet(QStringLiteral(
-        "QScrollArea{background:#FFFFFF;border:none;}"
+        "QScrollArea{background:%1;border:none;}"
         "QScrollBar:vertical{width:10px;background:transparent;margin:2px 2px 2px 0;}"
-        "QScrollBar::handle:vertical{background:#DEDEDF;border-radius:4px;min-height:36px;}"
-        "QScrollBar::handle:vertical:hover{background:#C9C9CC;}"
+        "QScrollBar::handle:vertical{background:%2;border-radius:4px;min-height:36px;}"
+        "QScrollBar::handle:vertical:hover{background:%3;}"
         "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
-        "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}"));
+        "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}")
+        .arg(theme::WHITE.name(), theme::ACTIVE.name(), theme::BORDER.name()));
     scroll_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     column_ = new QWidget(scroll_);
-    column_->setStyleSheet(QStringLiteral("background:#FFFFFF;"));
+    column_->setStyleSheet(QStringLiteral("background:%1;").arg(theme::WHITE.name()));
     columnLayout_ = new QVBoxLayout(column_);
     columnLayout_->setContentsMargins(0, 4, 0, 0);
     columnLayout_->setSpacing(0);
@@ -292,11 +322,11 @@ ChatView::ChatView(QWidget *parent)
     outer->addWidget(scroll_, 1);
 
     scrollBtn_ = new IconButton(QStringLiteral("arrow-down"), 17, scroll_);
-    scrollBtn_->setColor(theme::INK);
-    scrollBtn_->setHoverColor(theme::INK);
+    scrollBtn_->setColor(&theme::INK);
+    scrollBtn_->setHoverColor(&theme::INK);
     scrollBtn_->setHoverBackground(theme::HOVER);
-    scrollBtn_->setCircleOutline(theme::INK);
-    scrollBtn_->setCircleFill(theme::WHITE);
+    scrollBtn_->setCircleOutline(&theme::INK);
+    scrollBtn_->setCircleFill(&theme::WHITE);
     scrollBtn_->setFixedSize(32, 32);
     scrollBtn_->setToolTip(QStringLiteral("Jump to latest"));
     connect(scrollBtn_, &QAbstractButton::clicked, this, &ChatView::scrollToBottom);
@@ -332,10 +362,33 @@ ChatView::ChatView(QWidget *parent)
     setProject(nullptr);
 }
 
+void ChatView::applyTheme()
+{
+    scroll_->setStyleSheet(QStringLiteral(
+        "QScrollArea{background:%1;border:none;}"
+        "QScrollBar:vertical{width:10px;background:transparent;margin:2px 2px 2px 0;}"
+        "QScrollBar::handle:vertical{background:%2;border-radius:4px;min-height:36px;}"
+        "QScrollBar::handle:vertical:hover{background:%3;}"
+        "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
+        "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}")
+        .arg(theme::WHITE.name(), theme::ACTIVE.name(), theme::BORDER.name()));
+    column_->setStyleSheet(QStringLiteral("background:%1;").arg(theme::WHITE.name()));
+    if (projectBar_) {
+        projectBar_->setStyleSheet(QStringLiteral("background:%1;").arg(theme::WHITE.name()));
+        projectName_->setStyleSheet(
+            QStringLiteral("color:%1;background:transparent;").arg(theme::INK.name()));
+        projectDesc_->setStyleSheet(
+            QStringLiteral("color:%1;background:transparent;").arg(theme::MUTED.name()));
+    }
+    if (liveLabel_)
+        liveLabel_->setStyleSheet(
+            QStringLiteral("color:%1;background:transparent;").arg(theme::MUTED.name()));
+}
+
 void ChatView::setupProjectBar()
 {
     projectBar_ = new QWidget(this);
-    projectBar_->setStyleSheet(QStringLiteral("background:#FFFFFF;"));
+    projectBar_->setStyleSheet(QStringLiteral("background:%1;").arg(theme::WHITE.name()));
     auto *layout = new QHBoxLayout(projectBar_);
     layout->setContentsMargins(28, 0, 28, 2);
     layout->setSpacing(7);
@@ -353,11 +406,11 @@ void ChatView::setupProjectBar()
     layout->addWidget(new FolderIcon(projectBar_));
     projectName_ = new QLabel(projectBar_);
     projectName_->setFont(theme::font(13, QStringLiteral("semibold")));
-    projectName_->setStyleSheet(QStringLiteral("color:#0B0B0D;background:transparent;"));
+    projectName_->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::INK.name()));
     layout->addWidget(projectName_);
     projectDesc_ = new QLabel(projectBar_);
     projectDesc_->setFont(theme::font(10));
-    projectDesc_->setStyleSheet(QStringLiteral("color:#8B8B8F;background:transparent;"));
+    projectDesc_->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::MUTED.name()));
     layout->addWidget(projectDesc_);
     layout->addStretch(1);
 
@@ -368,15 +421,15 @@ void ChatView::setupProjectBar()
     layout->addWidget(files);
 
     auto *plus = new IconButton(QStringLiteral("plus"), 16, projectBar_);
-    plus->setColor(theme::MUTED);
-    plus->setHoverColor(theme::INK);
+    plus->setColor(&theme::MUTED);
+    plus->setHoverColor(&theme::INK);
     plus->setToolTip(QStringLiteral("New chat in this project"));
     connect(plus, &QAbstractButton::clicked, this, &ChatView::newChatRequested);
     layout->addWidget(plus);
 
     auto *close = new IconButton(QStringLiteral("close"), 13, projectBar_);
-    close->setColor(theme::MUTED);
-    close->setHoverColor(theme::INK);
+    close->setColor(&theme::MUTED);
+    close->setHoverColor(&theme::INK);
     close->setToolTip(QStringLiteral("Close project"));
     connect(close, &QAbstractButton::clicked, this, &ChatView::closeProjectRequested);
     layout->addWidget(close);
@@ -499,8 +552,8 @@ void ChatView::addUserMessage(QWidget *row, const QJsonObject &message)
     layout->addStretch(1);
     auto *card = new RoundedCard(row);
     card->setRadius(16);
-    card->setFill(theme::WHITE);
-    card->setOutline(theme::INK);
+    card->setFill(&theme::WHITE);
+    card->setOutline(&theme::INK);
     card->setThickness(1.45);
     card->setPadding(14);
     card->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
@@ -509,7 +562,7 @@ void ChatView::addUserMessage(QWidget *row, const QJsonObject &message)
     if (!text.trimmed().isEmpty()) {
         auto *label = new QLabel(text, card);
         label->setFont(theme::font(14));
-        label->setStyleSheet(QStringLiteral("color:#0B0B0D;background:transparent;"));
+        label->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::INK.name()));
         label->setWordWrap(true);
         label->setTextInteractionFlags(Qt::TextSelectableByMouse);
         label->setMaximumWidth(492);
@@ -521,7 +574,8 @@ void ChatView::addUserMessage(QWidget *row, const QJsonObject &message)
         auto *chip = new QLabel(QStringLiteral("  ") + util::shorten(filename, 30), card);
         chip->setFont(theme::font(10, QStringLiteral("medium")));
         chip->setStyleSheet(
-            QStringLiteral("background:#F2F2F3;color:#3A3B3E;border-radius:8px;padding:4px 8px;"));
+            QStringLiteral("background:%1;color:%2;border-radius:8px;padding:4px 8px;")
+                .arg(theme::CHIP.name(), theme::INK_SOFT.name()));
         card->content()->addWidget(chip, 0, Qt::AlignLeft);
         if (!text.trimmed().isEmpty())
             card->content()->setSpacing(8);
@@ -534,7 +588,7 @@ void ChatView::addImageCard(QWidget *column, const QJsonObject &meta)
     const QString path = meta.value(QStringLiteral("path")).toString();
     auto *card = new RoundedCard(column);
     card->setRadius(13);
-    card->setFill(theme::CHIP);
+    card->setFill(&theme::CHIP);
     card->setOutline(QColor());
     card->setThickness(0);
     card->setPadding(8);
@@ -557,7 +611,7 @@ void ChatView::addImageCard(QWidget *column, const QJsonObject &meta)
         label = meta.value(QStringLiteral("prompt")).toString();
     auto *caption = new QLabel(QStringLiteral("Takoyo Art · ") + util::shorten(label, 48), card);
     caption->setFont(theme::font(9));
-    caption->setStyleSheet(QStringLiteral("color:#8B8B8F;background:transparent;"));
+    caption->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::MUTED.name()));
     card->content()->addWidget(caption);
 
     auto *actions = new QWidget(card);
@@ -589,7 +643,7 @@ void ChatView::addProposalCard(QWidget *column, const QJsonObject &edit, int ind
 {
     auto *card = new RoundedCard(column);
     card->setRadius(13);
-    card->setFill(theme::CHIP);
+    card->setFill(&theme::CHIP);
     card->setOutline(QColor());
     card->setThickness(0);
     card->setPadding(13);
@@ -603,14 +657,14 @@ void ChatView::addProposalCard(QWidget *column, const QJsonObject &edit, int ind
     headLayout->addWidget(new IconGlyph(QStringLiteral("code"), theme::INK, 15, head));
     auto *path = new QLabel(edit.value(QStringLiteral("path")).toString(QStringLiteral("file")), head);
     path->setFont(theme::font(11, QStringLiteral("semibold")));
-    path->setStyleSheet(QStringLiteral("color:#0B0B0D;background:transparent;"));
+    path->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::INK.name()));
     headLayout->addWidget(path);
     headLayout->addStretch(1);
     const bool applied = edit.value(QStringLiteral("applied")).toBool();
     if (applied) {
         auto *state = new QLabel(QStringLiteral("Applied"), head);
         state->setFont(theme::font(9, QStringLiteral("medium")));
-        state->setStyleSheet(QStringLiteral("color:#0F9D58;background:transparent;"));
+        state->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::SUCCESS.name()));
         headLayout->addWidget(new IconGlyph(QStringLiteral("check"), theme::SUCCESS, 13, head));
         headLayout->addWidget(state);
     } else {
@@ -632,7 +686,7 @@ void ChatView::addProposalCard(QWidget *column, const QJsonObject &edit, int ind
     auto *code = new QLabel(preview, card);
     code->setTextFormat(Qt::PlainText);
     code->setFont(theme::mono(10));
-    code->setStyleSheet(QStringLiteral("color:#3A3B3E;background:transparent;"));
+    code->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::INK_SOFT.name()));
     code->setTextInteractionFlags(Qt::TextSelectableByMouse);
     code->setWordWrap(true);
     card->content()->addWidget(code);
@@ -649,21 +703,21 @@ void ChatView::addErrorCard(QWidget *column, const QString &message, const QStri
 {
     auto *card = new RoundedCard(column);
     card->setRadius(13);
-    card->setFill(theme::ERROR_BG);
-    card->setOutline(theme::ERROR_LINE);
+    card->setFill(&theme::ERROR_BG);
+    card->setOutline(&theme::ERROR_LINE);
     card->setThickness(1.2);
     card->setPadding(13);
 
     auto *title = new QLabel(QStringLiteral("Takoyo hit a snag"), card);
     title->setFont(theme::font(10, QStringLiteral("semibold")));
-    title->setStyleSheet(QStringLiteral("color:#D9433A;background:transparent;"));
+    title->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::DANGER.name()));
     card->content()->addWidget(title);
 
     auto *body = new QLabel(message, card);
     body->setFont(theme::font(11));
     body->setWordWrap(true);
     body->setMaximumWidth(520);
-    body->setStyleSheet(QStringLiteral("color:#3A3B3E;background:transparent;"));
+    body->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::INK_SOFT.name()));
     card->content()->addWidget(body);
 
     if (kind == QLatin1String("local") || kind == QLatin1String("provider") || kind == QLatin1String("image")) {
@@ -703,7 +757,7 @@ void ChatView::startStream()
 
     liveLabel_ = new QLabel(QStringLiteral("  Takoyo is thinking"), column);
     liveLabel_->setFont(theme::font(12));
-    liveLabel_->setStyleSheet(QStringLiteral("color:#8B8B8F;background:transparent;"));
+    liveLabel_->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::MUTED.name()));
     QPixmap mascot = thinkingPixmap(17);
     if (!mascot.isNull())
         liveLabel_->setPixmap(mascot);

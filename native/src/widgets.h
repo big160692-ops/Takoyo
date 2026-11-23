@@ -1,5 +1,7 @@
 #pragma once
 
+#include "theme.h"
+
 #include <QAbstractButton>
 #include <QColor>
 #include <QLabel>
@@ -20,7 +22,9 @@ public:
 
     void setRadius(int radius);
     void setFill(const QColor &fill);
+    void setFill(const QColor *fill); // tracks a palette global across switches
     void setOutline(const QColor &outline);
+    void setOutline(const QColor *outline); // tracks a palette global
     void setThickness(qreal thickness);
     void setPadding(int padding);
     QVBoxLayout *content() const { return layout_; }
@@ -30,8 +34,10 @@ protected:
 
 private:
     int radius_ = 18;
-    QColor fill_ = QColor(Qt::white);
+    QColor fill_ = theme::WHITE;
+    const QColor *fillPtr_ = &theme::WHITE; // default: follows the palette
     QColor outline_;
+    const QColor *outlinePtr_ = nullptr;
     qreal thickness_ = 1.5;
     int padding_ = 0;
     QVBoxLayout *layout_ = nullptr;
@@ -45,10 +51,14 @@ public:
     void setToolTip(const QString &toolTip);
     void setIconName(const QString &icon);
     void setColor(const QColor &color);
+    void setColor(const QColor *color); // tracks a palette global across switches
     void setHoverColor(const QColor &color);
+    void setHoverColor(const QColor *color);
     void setHoverBackground(const QColor &color);
     void setCircleFill(const QColor &color);
+    void setCircleFill(const QColor *color);
     void setCircleOutline(const QColor &color);
+    void setCircleOutline(const QColor *color);
 
     QSize sizeHint() const override;
 
@@ -61,11 +71,18 @@ private:
     QString icon_;
     int iconSize_ = 18;
     int pad_ = 6;
-    QColor color_ = QColor("#0B0B0D");
-    QColor hoverColor_ = QColor("#0B0B0D");
+    QColor color_ = theme::INK;
+    QColor hoverColor_ = theme::INK;
     QColor hoverBackground_ = QColor(Qt::transparent);
     QColor circleFill_ = QColor(Qt::transparent);
     QColor circleOutline_ = QColor(Qt::transparent);
+    // Non-null when the value is tracked from a theme:: palette global, so the
+    // button repaints correctly after a live palette switch. The icon colour
+    // and hover colour default to tracking the palette.
+    const QColor *colorPtr_ = &theme::INK;
+    const QColor *hoverColorPtr_ = &theme::INK;
+    const QColor *circleFillPtr_ = nullptr;
+    const QColor *circleOutlinePtr_ = nullptr;
 };
 
 class CircleButton : public IconButton {
@@ -140,6 +157,7 @@ class SearchField : public QWidget {
 public:
     explicit SearchField(QWidget *parent = nullptr);
     QLineEdit *edit() const { return edit_; }
+    void applyTheme();
 
 protected:
     void paintEvent(QPaintEvent *event) override;

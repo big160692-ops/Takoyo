@@ -1,0 +1,22 @@
+{
+  "name": "Forest",
+  "WHITE": "#1A2E1A",
+  "INK": "#E8F0E8",
+  "INK_SOFT": "#C8DCC8",
+  "MUTED": "#7A9B7A",
+  "FAINT": "#2A3E2A",
+  "LINE": "#4A6A4A",
+  "LINE_SOFT": "#2A3E2A",
+  "BORDER": "#3A5A3A",
+  "HOVER": "#2A3E2A",
+  "ACTIVE": "#2A3E2A",
+  "SEARCH_BG": "#142414",
+  "CHIP": "#2A3E2A",
+  "DANGER": "#E57373",
+  "SUCCESS": "#81C784",
+  "CODE_RED": "#E57373",
+  "CODE_GREEN": "#81C784",
+  "CODE_BLUE": "#64B5F6",
+  "ERROR_BG": "#3A2A2A",
+  "ERROR_LINE": "#E57373"
+}

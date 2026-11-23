@@ -19,6 +19,7 @@ public:
     void setProject(const ProjectSummary *project);
     void startFloat();
     void stopFloat();
+    void applyTheme();
 
 signals:
     void projectFilesRequested();

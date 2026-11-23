@@ -47,13 +47,30 @@ struct ToolEdit {
 struct FileRequest {
     QString path;
     bool listing = false;
+    bool searching = false;
+    QString query;
+    bool content = true;
+};
+
+struct OpenRequest {
+    QString url;   // for open_url
+    QString app;   // for open_app
+};
+
+struct EditRequest {
+    QString path;
+    QString oldText;
+    QString newText;
 };
 
 struct ParsedReply {
     QString cleaned;
     QList<ToolEdit> edits;
+    QList<EditRequest> editRequests;
     QList<FileRequest> fileRequests;
     QStringList imagePrompts;
+    QStringList openUrls;
+    QStringList openApps;
 };
 
 ParsedReply parseReply(const QString &text);

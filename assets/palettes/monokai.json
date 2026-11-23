@@ -1,0 +1,22 @@
+{
+  "name": "Monokai",
+  "WHITE": "#272822",
+  "INK": "#F8F8F2",
+  "INK_SOFT": "#E6DB74",
+  "MUTED": "#75715E",
+  "FAINT": "#3E3D32",
+  "LINE": "#75715E",
+  "LINE_SOFT": "#3E3D32",
+  "BORDER": "#3E3D32",
+  "HOVER": "#3E3D32",
+  "ACTIVE": "#3E3D32",
+  "SEARCH_BG": "#1E1F1C",
+  "CHIP": "#3E3D32",
+  "DANGER": "#F92672",
+  "SUCCESS": "#A6E22E",
+  "CODE_RED": "#F92672",
+  "CODE_GREEN": "#A6E22E",
+  "CODE_BLUE": "#66D9EF",
+  "ERROR_BG": "#3A2A2A",
+  "ERROR_LINE": "#F92672"
+}

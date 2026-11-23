@@ -1,0 +1,22 @@
+{
+  "name": "Solarized Light",
+  "WHITE": "#FDF6E3",
+  "INK": "#586E75",
+  "INK_SOFT": "#657B83",
+  "MUTED": "#93A1A1",
+  "FAINT": "#EEE8D5",
+  "LINE": "#93A1A1",
+  "LINE_SOFT": "#EEE8D5",
+  "BORDER": "#EEE8D5",
+  "HOVER": "#EEE8D5",
+  "ACTIVE": "#EEE8D5",
+  "SEARCH_BG": "#EEE8D5",
+  "CHIP": "#EEE8D5",
+  "DANGER": "#CB4B16",
+  "SUCCESS": "#859900",
+  "CODE_RED": "#CB4B16",
+  "CODE_GREEN": "#859900",
+  "CODE_BLUE": "#268BD2",
+  "ERROR_BG": "#FDECEA",
+  "ERROR_LINE": "#DC322F"
+}

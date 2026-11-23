@@ -26,49 +26,60 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QVBoxLayout>
 
 namespace {
 
-const char *kDialogStyle = R"(
-QDialog { background: #FFFFFF; }
-QLabel { color: #0B0B0D; background: transparent; }
+QString dialogStyle()
+{
+    return QStringLiteral(R"(
+QDialog { background: %1; }
+QLabel { color: %2; background: transparent; }
 QLineEdit, QPlainTextEdit, QComboBox, QSpinBox {
-    background: #FFFFFF;
-    border: 1.3px solid #0B0B0D;
+    background: %1;
+    border: 1.3px solid %2;
     border-radius: 10px;
     padding: 7px 10px;
-    color: #0B0B0D;
-    selection-background-color: #DEDEDF;
+    color: %2;
+    selection-background-color: %3;
 }
-QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus { border: 1.6px solid #0B0B0D; }
+QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus { border: 1.6px solid %2; }
 QComboBox { padding-right: 30px; }
 QComboBox::drop-down { border: none; width: 28px; }
 QComboBox QAbstractItemView {
-    background: #FFFFFF;
-    border: 1px solid #E7E7E9;
-    selection-background-color: #EDEDEF;
-    selection-color: #0B0B0D;
+    background: %1;
+    border: 1px solid %4;
+    selection-background-color: %3;
+    selection-color: %2;
     outline: none;
 }
 QListWidget {
-    background: #FFFFFF;
-    border: 1.2px solid #E7E7E9;
+    background: %1;
+    border: 1.2px solid %4;
     border-radius: 12px;
     outline: none;
     padding: 4px;
 }
-QListWidget::item { padding: 6px 8px; border-radius: 8px; color: #3A3B3E; }
-QListWidget::item:hover { background: #F4F4F5; }
-QListWidget::item:selected { background: #EDEDEF; color: #0B0B0D; }
-QCheckBox { color: #0B0B0D; spacing: 8px; background: transparent; }
+QListWidget::item { padding: 6px 8px; border-radius: 8px; color: %5; }
+QListWidget::item:hover { background: %6; }
+QListWidget::item:selected { background: %3; color: %2; }
+QCheckBox { color: %2; spacing: 8px; background: transparent; }
 QScrollBar:vertical { width: 10px; background: transparent; margin: 2px; }
-QScrollBar::handle:vertical { background: #DEDEDF; border-radius: 4px; min-height: 30px; }
+QScrollBar::handle:vertical { background: %3; border-radius: 4px; min-height: 30px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
-)";
+)")
+        .arg(theme::WHITE.name())
+        .arg(theme::INK.name())
+        .arg(theme::ACTIVE.name())
+        .arg(theme::LINE_SOFT.name())
+        .arg(theme::INK_SOFT.name())
+        .arg(theme::HOVER.name());
+}
 
 class Combo : public QComboBox {
 public:
@@ -96,7 +107,7 @@ QLabel *textLabel(const QString &text, int size, const QString &weight, const QC
 
 void styleDialog(QDialog *dialog)
 {
-    dialog->setStyleSheet(QString::fromLatin1(kDialogStyle));
+    dialog->setStyleSheet(dialogStyle());
     dialog->setFont(theme::font(12));
     dialog->setModal(true);
 }
@@ -448,6 +459,12 @@ SettingsDialog::SettingsDialog(Config *config, QWidget *parent)
     form->addRow(textLabel(QStringLiteral("Image size"), 10, QStringLiteral("medium"), theme::INK_SOFT, this),
                  imageSize_);
 
+    palette_ = new Combo(this);
+    for (const theme::PaletteInfo &info : theme::availablePalettes())
+        palette_->addItem(info.name, info.id);
+    form->addRow(textLabel(QStringLiteral("Colour theme"), 10, QStringLiteral("medium"), theme::INK_SOFT, this),
+                 palette_);
+
     apiPort_ = new QSpinBox(this);
     apiPort_->setRange(1024, 65535);
     apiPort_->setButtonSymbols(QAbstractSpinBox::NoButtons);
@@ -573,6 +590,12 @@ SettingsDialog::SettingsDialog(Config *config, QWidget *parent)
     if (sizeIndex >= 0)
         imageSize_->setCurrentIndex(sizeIndex);
 
+    const QString palette = config_->str(QStringLiteral("palette"));
+    const int paletteIndex = palette_->findData(palette);
+    palette_->setCurrentIndex(paletteIndex >= 0 ? paletteIndex : 0);
+    connect(palette_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int) { emit palettePreviewRequested(palette_->currentData().toString()); });
+
     loadProvider();
 }
 
@@ -610,6 +633,7 @@ void SettingsDialog::save()
     }
     config_->set(QStringLiteral("image_provider"), imageProvider_->currentData().toString(), false);
     config_->set(QStringLiteral("image_size"), imageSize_->currentText(), false);
+    config_->set(QStringLiteral("palette"), palette_->currentData().toString(), false);
     config_->set(QStringLiteral("auto_apply_edits"), autoApply_->isChecked(), false);
     config_->set(QStringLiteral("api_port"), apiPort_->value(), false);
     const QString apiHost = apiHost_->text().trimmed();
@@ -624,6 +648,154 @@ void SettingsDialog::save()
             allowedOrigins.append(value);
     }
     config_->set(QStringLiteral("api_allowed_origins"), allowedOrigins, false);
+    config_->save();
+    accept();
+}
+
+// ---------------------------------------------------------------------------
+// PalettePickerDialog
+// ---------------------------------------------------------------------------
+namespace {
+struct PaletteColors {
+    QColor ground, ink, accent1, accent2, accent3;
+};
+
+PaletteColors readPaletteColors(const QString &id)
+{
+    PaletteColors c{QColor(QStringLiteral("#0B0B0D")), QColor(QStringLiteral("#FFFFFF")),
+                    QColor(QStringLiteral("#79B8FF")), QColor(QStringLiteral("#2FBF71")),
+                    QColor(QStringLiteral("#FF6B60"))};
+    if (id == QLatin1String("dark"))
+        return c;
+    QFile file(QDir(util::assetsDir()).filePath(QStringLiteral("palettes/") + id + QStringLiteral(".json")));
+    if (!file.open(QIODevice::ReadOnly))
+        return c;
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject())
+        return c;
+    const QJsonObject o = doc.object();
+    const auto get = [&o](const char *key, QColor fallback) {
+        const QColor col(o.value(QLatin1String(key)).toString());
+        return col.isValid() ? col : fallback;
+    };
+    c.ground = get("WHITE", c.ground);
+    c.ink = get("INK", c.ink);
+    c.accent1 = get("CODE_BLUE", c.accent1);
+    c.accent2 = get("SUCCESS", c.accent2);
+    c.accent3 = get("DANGER", c.accent3);
+    return c;
+}
+} // namespace
+
+class PaletteSwatch : public QWidget {
+public:
+    explicit PaletteSwatch(QWidget *parent = nullptr) : QWidget(parent) { setFixedSize(46, 30); }
+    void setColors(const PaletteColors &c) { colors_ = c; update(); }
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setPen(Qt::NoPen);
+        p.setBrush(colors_.ground);
+        p.drawRoundedRect(rect(), 6, 6);
+        p.setPen(QPen(colors_.ink, 1));
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(rect().adjusted(0.5, 0.5, -0.5, -0.5), 6, 6);
+        const int d = 8;
+        const QColor dots[3] = {colors_.accent1, colors_.accent2, colors_.accent3};
+        for (int i = 0; i < 3; ++i) {
+            p.setPen(Qt::NoPen);
+            p.setBrush(dots[i]);
+            p.drawEllipse(6 + i * 12, 11, d, d);
+        }
+    }
+private:
+    PaletteColors colors_{};
+};
+
+PalettePickerDialog::PalettePickerDialog(Config *config, QWidget *parent)
+    : QDialog(parent)
+    , config_(config)
+{
+    setWindowTitle(QStringLiteral("Colour theme"));
+    resize(360, 520);
+    styleDialog(this);
+
+    previousId_ = config_->str(QStringLiteral("palette"));
+    selectedId_ = previousId_;
+
+    auto *outer = new QVBoxLayout(this);
+    outer->setContentsMargins(20, 18, 20, 16);
+    outer->setSpacing(10);
+    outer->addWidget(textLabel(QStringLiteral("Colour theme"), 18, QStringLiteral("semibold"), theme::INK, this));
+    outer->addWidget(textLabel(QStringLiteral("Pick a palette. It applies instantly; Cancel reverts."),
+                              10, QStringLiteral("regular"), theme::MUTED, this));
+
+    list_ = new QListWidget(this);
+    list_->setSpacing(4);
+    for (const theme::PaletteInfo &info : theme::availablePalettes()) {
+        auto *item = new QListWidgetItem(list_);
+        item->setData(Qt::UserRole, info.id);
+        auto *row = new QWidget(list_);
+        auto *rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(6, 4, 6, 4);
+        rowLayout->setSpacing(10);
+        auto *swatch = new PaletteSwatch(row);
+        swatch->setColors(readPaletteColors(info.id));
+        rowLayout->addWidget(swatch);
+        auto *name = new QLabel(info.name, row);
+        name->setFont(theme::font(12, QStringLiteral("medium")));
+        name->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::INK.name()));
+        rowLayout->addWidget(name);
+        rowLayout->addStretch(1);
+        item->setSizeHint(QSize(0, 42));
+        list_->setItemWidget(item, row);
+    }
+    outer->addWidget(list_, 1);
+
+    auto *buttons = new QHBoxLayout();
+    buttons->addStretch(1);
+    auto *cancel = new TextButton(QStringLiteral("Cancel"), TextButton::Variant::Secondary, 32, this);
+    auto *apply = new TextButton(QStringLiteral("Apply"), TextButton::Variant::Primary, 32, this);
+    buttons->addWidget(cancel);
+    buttons->addWidget(apply);
+    outer->addLayout(buttons);
+
+    // Select the current palette.
+    for (int i = 0; i < list_->count(); ++i) {
+        if (list_->item(i)->data(Qt::UserRole).toString() == previousId_) {
+            list_->setCurrentRow(i);
+            break;
+        }
+    }
+
+    connect(list_, &QListWidget::currentRowChanged, this, [this](int) { onSelectionChanged(); });
+    connect(cancel, &QAbstractButton::clicked, this, &QDialog::reject);
+    connect(apply, &QAbstractButton::clicked, this, [this]() { applySelection(); });
+
+    // Preview the starting palette once (no-op if already applied).
+    onSelectionChanged();
+}
+
+void PalettePickerDialog::onSelectionChanged()
+{
+    if (!list_->currentItem())
+        return;
+    selectedId_ = list_->currentItem()->data(Qt::UserRole).toString();
+    emit palettePreviewRequested(selectedId_);
+}
+
+void PalettePickerDialog::reject()
+{
+    emit palettePreviewRequested(previousId_);
+    QDialog::reject();
+}
+
+void PalettePickerDialog::applySelection()
+{
+    config_->set(QStringLiteral("palette"), selectedId_, false);
     config_->save();
     accept();
 }

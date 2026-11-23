@@ -32,12 +32,12 @@ ArtPanel::ArtPanel(QWidget *parent)
     stateLayout->addSpacing(8);
     stateTitle_ = new QLabel(QStringLiteral("Takoyo Art"), state_);
     stateTitle_->setFont(theme::font(17, QStringLiteral("semibold")));
-    stateTitle_->setStyleSheet(QStringLiteral("color:#0B0B0D;background:transparent;"));
+    stateTitle_->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::INK.name()));
     stateTitle_->setAlignment(Qt::AlignCenter);
     stateLayout->addWidget(stateTitle_);
     stateSub_ = new QLabel(QStringLiteral("Images you make will appear here"), state_);
     stateSub_->setFont(theme::font(11));
-    stateSub_->setStyleSheet(QStringLiteral("color:#8B8B8F;background:transparent;"));
+    stateSub_->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(theme::MUTED.name()));
     stateSub_->setAlignment(Qt::AlignCenter);
     stateSub_->setWordWrap(true);
     stateSub_->setFixedWidth(300);
@@ -49,8 +49,8 @@ ArtPanel::ArtPanel(QWidget *parent)
     regenBtn_ = new IconButton(QStringLiteral("refresh"), 16, this);
     closeBtn_ = new IconButton(QStringLiteral("close"), 16, this);
     for (IconButton *button : {openBtn_, saveBtn_, regenBtn_, closeBtn_}) {
-        button->setColor(theme::INK_SOFT);
-        button->setHoverColor(theme::INK);
+        button->setColor(&theme::INK_SOFT);
+        button->setHoverColor(&theme::INK);
     }
     openBtn_->setToolTip(QStringLiteral("Open image"));
     saveBtn_->setToolTip(QStringLiteral("Save a copy"));
@@ -81,6 +81,14 @@ QRectF ArtPanel::cardRect() const
 QRectF ArtPanel::stageRect() const
 {
     return cardRect().adjusted(14, 14, -14, -14);
+}
+
+void ArtPanel::applyTheme()
+{
+    stateTitle_->setStyleSheet(
+        QStringLiteral("color:%1;background:transparent;").arg(theme::INK.name()));
+    stateSub_->setStyleSheet(
+        QStringLiteral("color:%1;background:transparent;").arg(theme::MUTED.name()));
 }
 
 void ArtPanel::setEmpty()
