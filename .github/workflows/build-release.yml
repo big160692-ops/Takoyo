@@ -28,7 +28,7 @@ jobs:
   build-windows:
     name: Build Windows (MinGW)
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     
     steps:
       - name: Checkout
@@ -37,6 +37,7 @@ jobs:
           submodules: recursive
       
       - name: Setup Qt
+        id: qt
         uses: jurplel/install-qt-action@v3
         with:
           version: ${{ env.QT_VERSION }}
@@ -48,6 +49,7 @@ jobs:
           setup-python: false
       
       - name: Setup MinGW
+        id: mingw
         uses: egor-tensin/setup-mingw@v2
         with:
           version: ${{ env.MINGW_VERSION }}
@@ -67,23 +69,28 @@ jobs:
       - name: Configure CMake
         working-directory: ./native
         env:
-          PATH: ${{ env.QT_BIN }};${{ env.MINGW_BIN }};${{ env.PATH }}
+          PATH: ${{ steps.qt.outputs.path }};${{ steps.mingw.outputs.path }};${{ env.PATH }}
         run: |
           cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
       
       - name: Build Native App
         working-directory: ./native
         env:
-          PATH: ${{ env.QT_BIN }};${{ env.MINGW_BIN }};${{ env.PATH }}
+          PATH: ${{ steps.qt.outputs.path }};${{ steps.mingw.outputs.path }};${{ env.PATH }}
         run: |
           cmake --build build --config Release
       
       - name: Deploy Qt Dependencies
         working-directory: ./native
         env:
-          PATH: ${{ env.QT_BIN }};${{ env.MINGW_BIN }};${{ env.PATH }}
+          PATH: ${{ steps.qt.outputs.path }};${{ steps.mingw.outputs.path }};${{ env.PATH }}
         run: |
           $nativeExe = "build/bin/TakoyoNative.exe"
+          if (-not (Test-Path $nativeExe)) {
+            Write-Error "TakoyoNative.exe not found at $nativeExe"
+            Get-ChildItem build/bin -Recurse | Select-Object FullName
+            exit 1
+          }
           windeployqt --release --no-translations $nativeExe
           
           # Copy to dist
@@ -94,29 +101,66 @@ jobs:
       - name: Build Python Engine
         working-directory: ./native
         run: |
+          if (-not (Test-Path "TakoyoEngine.spec")) {
+            Write-Error "TakoyoEngine.spec not found"
+            Get-ChildItem . | Select-Object Name
+            exit 1
+          }
           python -m PyInstaller --clean --noconfirm TakoyoEngine.spec
           New-Item -ItemType Directory engine-dist -Force | Out-Null
+          if (-not (Test-Path "dist/TakoyoEngine.exe")) {
+            Write-Error "PyInstaller output not found"
+            Get-ChildItem dist -Recurse | Select-Object FullName
+            exit 1
+          }
           Copy-Item dist/TakoyoEngine.exe engine-dist/
       
       - name: Build Single Executable
         working-directory: ./native
         env:
-          PATH: ${{ env.QT_BIN }};${{ env.MINGW_BIN }};${{ env.PATH }}
-          MINGW_BIN: ${{ env.MINGW_BIN }}
+          PATH: ${{ steps.qt.outputs.path }};${{ steps.mingw.outputs.path }};${{ env.PATH }}
+          MINGW_BIN: ${{ steps.mingw.outputs.path }}
         run: |
+          if (-not (Test-Path "pack_single.py")) {
+            Write-Error "pack_single.py not found"
+            exit 1
+          }
+          if (-not (Test-Path "dist/TakoyoNative.exe")) {
+            Write-Error "dist/TakoyoNative.exe not found"
+            Get-ChildItem dist -Recurse | Select-Object FullName
+            exit 1
+          }
+          if (-not (Test-Path "engine-dist/TakoyoEngine.exe")) {
+            Write-Error "engine-dist/TakoyoEngine.exe not found"
+            Get-ChildItem engine-dist -Recurse | Select-Object FullName
+            exit 1
+          }
           python pack_single.py
       
-- name: Build Smart Installer
+      - name: Build Smart Installer
         working-directory: ./native/launcher
         env:
-          PATH: ${{ env.MINGW_BIN }};${{ env.PATH }}
+          PATH: ${{ steps.mingw.outputs.path }};${{ env.PATH }}
         run: |
+          if (-not (Test-Path "installer_launcher.cpp")) {
+            Write-Error "installer_launcher.cpp not found"
+            exit 1
+          }
           g++ -O2 -s -municode -mwindows -static installer_launcher.cpp -o installer_launcher.exe -luser32 -lshell32 -lshlwapi
+          if (-not (Test-Path "installer_launcher.exe")) {
+            Write-Error "Failed to build installer_launcher.exe"
+            exit 1
+          }
       
       - name: Package Installer EXE
         working-directory: ./
         run: |
-          # Use the pre-built smart installer launcher (downloads models on first run)
+          # Copy the smart installer launcher to root
+          if (-not (Test-Path "native/launcher/installer_launcher.exe")) {
+            Write-Error "installer_launcher.exe not found"
+            Get-ChildItem native/launcher | Select-Object Name
+            exit 1
+          }
           Copy-Item native/launcher/installer_launcher.exe "Takoyo-Setup-${{ env.VERSION }}-${{ env.VERSION_NAME }}.exe"
           
           # Also create portable zip for alternative distribution
@@ -126,15 +170,57 @@ jobs:
           
           Copy-Item native/launcher/installer_launcher.exe "$stage/Takoyo-Setup-${{ env.VERSION }}-${{ env.VERSION_NAME }}.exe"
           Copy-Item smart_installer.py "$stage/smart_installer.py"
+          if (-not (Test-Path "native/single/Takoyo.exe")) {
+            Write-Error "native/single/Takoyo.exe not found"
+            Get-ChildItem native/single -Recurse | Select-Object FullName
+            exit 1
+          }
           Copy-Item native/single/Takoyo.exe "$stage/Takoyo.exe"
           
           $readme = @"
-  # Takoyo $env:VERSION "$env:VERSION_NAME" Installer Package
-  ...
-  "@
+# Takoyo $env:VERSION "$env:VERSION_NAME" Installer Package
+
+## Files
+- `Takoyo-Setup-$env:VERSION-$env:VERSION_NAME.exe` — Smart installer (downloads models, creates shortcuts)
+- `smart_installer.py` — Python script (run directly if you have Python)
+- `Takoyo.exe` — Main application (for offline installs)
+
+## Usage
+### Option 1: Run the smart installer (recommended)
+Double-click `Takoyo-Setup-$env:VERSION-$env:VERSION_NAME.exe`
+
+### Option 2: Run with Python directly
+```powershell
+python smart_installer.py --models default
+python smart_installer.py --models all
+python smart_installer.py --silent
+python smart_installer.py --uninstall
+```
+
+### Option 3: Offline install
+Just copy `Takoyo.exe` anywhere and run it.
+
+## Model Downloads
+Models are downloaded from Hugging Face to `~/.takoyo/models/`:
+- qwen2.5-0.5b (~500 MB)
+- qwen2.5-1.5b (~1.1 GB)
+- qwen2.5-coder-1.5b (~1.1 GB) — default
+- qwen2.5-3b (~2.1 GB)
+"@
           Set-Content "$stage/README.txt" -Value $readme -Encoding utf8
           
           Compress-Archive -Path "$stage\*" -DestinationPath "Takoyo-$env:VERSION-$env:VERSION_NAME-installer.zip" -Force
+      
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Takoyo-windows
+          path: |
+            native/single/Takoyo.exe
+            Takoyo-Setup-${{ env.VERSION }}-${{ env.VERSION_NAME }}.exe
+            Takoyo-${{ env.VERSION }}-${{ env.VERSION_NAME }}-installer.zip
+            native/engine-dist/TakoyoEngine.exe
+          retention-days: 30
       
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -157,7 +243,7 @@ jobs:
   build-linux:
     name: Build Linux (AppImage)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     
     steps:
       - name: Checkout
@@ -204,14 +290,14 @@ jobs:
           
           # Create desktop file
           cat > AppDir/usr/share/applications/takoyo.desktop << 'EOF'
-  [Desktop Entry]
-  Type=Application
-  Name=Takoyo
-  Comment=AI Agent with local models
-  Exec=TakoyoNative
-  Icon=takoyo
-  Categories=Development;Utility;
-  EOF
+[Desktop Entry]
+Type=Application
+Name=Takoyo
+Comment=AI Agent with local models
+Exec=TakoyoNative
+Icon=takoyo
+Categories=Development;Utility;
+EOF
           
           cp ../assets/takoyo.ico AppDir/usr/share/icons/hicolor/256x256/apps/takoyo.png 2>/dev/null || true
       
@@ -238,6 +324,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: Takoyo-windows
+      
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: Takoyo-linux
       
       - name: Generate SHA256
         run: |
