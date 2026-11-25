@@ -1,0 +1,22 @@
+{
+  "name": "Catppuccin Mocha",
+  "WHITE": "#1E1E2E",
+  "INK": "#CDD6F4",
+  "INK_SOFT": "#BAC2DE",
+  "MUTED": "#A6ADC8",
+  "FAINT": "#585B70",
+  "LINE": "#585B70",
+  "LINE_SOFT": "#313244",
+  "BORDER": "#45475A",
+  "HOVER": "#313244",
+  "ACTIVE": "#313244",
+  "SEARCH_BG": "#181825",
+  "CHIP": "#313244",
+  "DANGER": "#F38BA8",
+  "SUCCESS": "#A6E3A1",
+  "CODE_RED": "#F38BA8",
+  "CODE_GREEN": "#A6E3A1",
+  "CODE_BLUE": "#89B4FA",
+  "ERROR_BG": "#312A3A",
+  "ERROR_LINE": "#F38BA8"
+}

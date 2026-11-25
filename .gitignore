@@ -1,0 +1,47 @@
+# Build artifacts
+native/build/
+native/dist/
+native/single/stage/
+native/single/work/
+native/single/Takoyo.exe
+native/engine-dist/
+native/launcher/*.exe
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Installer packages
+installer_package/
+Takoyo-*-installer.zip
+Takoyo-*-portable.zip
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+*.log
+
+# Local config
+.takoyo/
+*.json.backup
+
+# Qt
+*.pro.user
+*.pro.user.*
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.ninja
+build-*/

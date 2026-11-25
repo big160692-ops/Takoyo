@@ -1,0 +1,22 @@
+{
+  "name": "Solarized Dark",
+  "WHITE": "#002B36",
+  "INK": "#839496",
+  "INK_SOFT": "#93A1A1",
+  "MUTED": "#586E75",
+  "FAINT": "#073642",
+  "LINE": "#586E75",
+  "LINE_SOFT": "#073642",
+  "BORDER": "#073642",
+  "HOVER": "#073642",
+  "ACTIVE": "#073642",
+  "SEARCH_BG": "#002B36",
+  "CHIP": "#073642",
+  "DANGER": "#CB4B16",
+  "SUCCESS": "#859900",
+  "CODE_RED": "#CB4B16",
+  "CODE_GREEN": "#859900",
+  "CODE_BLUE": "#268BD2",
+  "ERROR_BG": "#073642",
+  "ERROR_LINE": "#DC322F"
+}

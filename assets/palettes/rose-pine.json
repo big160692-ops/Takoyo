@@ -1,0 +1,22 @@
+{
+  "name": "Ros\u00e9 Pine",
+  "WHITE": "#191724",
+  "INK": "#E0DEF4",
+  "INK_SOFT": "#908CAA",
+  "MUTED": "#6E6A86",
+  "FAINT": "#26233A",
+  "LINE": "#403D52",
+  "LINE_SOFT": "#26233A",
+  "BORDER": "#26233A",
+  "HOVER": "#26233A",
+  "ACTIVE": "#26233A",
+  "SEARCH_BG": "#1F1D2E",
+  "CHIP": "#26233A",
+  "DANGER": "#EB6F92",
+  "SUCCESS": "#9CCFD8",
+  "CODE_RED": "#EB6F92",
+  "CODE_GREEN": "#9CCFD8",
+  "CODE_BLUE": "#31748F",
+  "ERROR_BG": "#3A2A3A",
+  "ERROR_LINE": "#EB6F92"
+}

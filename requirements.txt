@@ -1,0 +1,2 @@
+# Required: draws the antialiased outlines, mascot, wordmark and art.
+Pillow>=10.0.0

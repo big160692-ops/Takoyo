@@ -1,0 +1,22 @@
+{
+  "name": "Sepia",
+  "WHITE": "#F4ECD8",
+  "INK": "#5B4636",
+  "INK_SOFT": "#6B5444",
+  "MUTED": "#8B7355",
+  "FAINT": "#D4C5A9",
+  "LINE": "#8B7355",
+  "LINE_SOFT": "#E8DDC0",
+  "BORDER": "#D4C5A9",
+  "HOVER": "#E8DDC0",
+  "ACTIVE": "#E8DDC0",
+  "SEARCH_BG": "#E8DDC0",
+  "CHIP": "#E8DDC0",
+  "DANGER": "#C0392B",
+  "SUCCESS": "#27AE60",
+  "CODE_RED": "#C0392B",
+  "CODE_GREEN": "#27AE60",
+  "CODE_BLUE": "#2980B9",
+  "ERROR_BG": "#F5E0DC",
+  "ERROR_LINE": "#C0392B"
+}

@@ -1,0 +1,22 @@
+{
+  "name": "High Contrast",
+  "WHITE": "#000000",
+  "INK": "#FFFFFF",
+  "INK_SOFT": "#FFFFFF",
+  "MUTED": "#FFFFFF",
+  "FAINT": "#808080",
+  "LINE": "#FFFFFF",
+  "LINE_SOFT": "#333333",
+  "BORDER": "#FFFFFF",
+  "HOVER": "#333333",
+  "ACTIVE": "#333333",
+  "SEARCH_BG": "#000000",
+  "CHIP": "#333333",
+  "DANGER": "#FF3333",
+  "SUCCESS": "#00FF00",
+  "CODE_RED": "#FF3333",
+  "CODE_GREEN": "#00FF00",
+  "CODE_BLUE": "#00FFFF",
+  "ERROR_BG": "#330000",
+  "ERROR_LINE": "#FF3333"
+}

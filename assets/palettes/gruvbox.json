@@ -1,0 +1,22 @@
+{
+  "name": "Gruvbox",
+  "WHITE": "#282828",
+  "INK": "#EBDBB2",
+  "INK_SOFT": "#D5C4A1",
+  "MUTED": "#928374",
+  "FAINT": "#3C3836",
+  "LINE": "#928374",
+  "LINE_SOFT": "#3C3836",
+  "BORDER": "#3C3836",
+  "HOVER": "#3C3836",
+  "ACTIVE": "#3C3836",
+  "SEARCH_BG": "#1D2021",
+  "CHIP": "#3C3836",
+  "DANGER": "#FB4934",
+  "SUCCESS": "#B8BB26",
+  "CODE_RED": "#FB4934",
+  "CODE_GREEN": "#B8BB26",
+  "CODE_BLUE": "#83A598",
+  "ERROR_BG": "#3A2A2A",
+  "ERROR_LINE": "#FB4934"
+}
