@@ -106,21 +106,25 @@ jobs:
         run: |
           python pack_single.py
       
-      - name: Build Smart Installer
+- name: Build Smart Installer
         working-directory: ./native/launcher
         env:
           PATH: ${{ env.MINGW_BIN }};${{ env.PATH }}
         run: |
           g++ -O2 -s -municode -mwindows -static installer_launcher.cpp -o installer_launcher.exe -luser32 -lshell32 -lshlwapi
       
-      - name: Package Installer
+      - name: Package Installer EXE
         working-directory: ./
         run: |
+          # Use the pre-built smart installer launcher (downloads models on first run)
+          Copy-Item native/launcher/installer_launcher.exe "Takoyo-Setup-${{ env.VERSION }}-${{ env.VERSION_NAME }}.exe"
+          
+          # Also create portable zip for alternative distribution
           $stage = "installer_package"
           Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
           New-Item -ItemType Directory $stage | Out-Null
           
-          Copy-Item native/launcher/installer_launcher.exe "$stage/Takoyo-Setup-$env:VERSION-$env:VERSION_NAME.exe"
+          Copy-Item native/launcher/installer_launcher.exe "$stage/Takoyo-Setup-${{ env.VERSION }}-${{ env.VERSION_NAME }}.exe"
           Copy-Item smart_installer.py "$stage/smart_installer.py"
           Copy-Item native/single/Takoyo.exe "$stage/Takoyo.exe"
           
@@ -141,6 +145,7 @@ jobs:
           body_path: RELEASE_NOTES.md
           files: |
             native/single/Takoyo.exe
+            Takoyo-Setup-${{ env.VERSION }}-${{ env.VERSION_NAME }}.exe
             Takoyo-${{ env.VERSION }}-${{ env.VERSION_NAME }}-installer.zip
             native/engine-dist/TakoyoEngine.exe
           draft: false
